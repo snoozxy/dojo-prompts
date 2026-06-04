@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.11
 """
-Generate watch-optimized SRT subtitles from ElevenLabs Scribe JSON.
+Generate watch-optimized SRT subtitles from transcript JSON.
 Fine-grained cues with bunsetsu-aware line breaks (≤18 chars/line).
 """
 
@@ -285,7 +285,7 @@ def lines_to_cues(lines: list[Line]) -> list[Cue]:
 
 def main():
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <elevenlabs_scribe.json>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <transcript.json>", file=sys.stderr)
         sys.exit(1)
 
     html_mode = "--html" in sys.argv
@@ -304,7 +304,7 @@ def main():
             i += 1
 
     if not remaining:
-        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <elevenlabs_scribe.json>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <transcript.json>", file=sys.stderr)
         sys.exit(1)
 
     json_path = remaining[0]

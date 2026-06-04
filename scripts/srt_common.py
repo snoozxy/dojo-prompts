@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.11
 """
-Shared code for ElevenLabs Scribe JSON → SRT conversion.
+Shared code for transcript JSON → SRT conversion.
 Handles JSON loading, MeCab bunsetsu segmentation, and output writing.
 """
 
@@ -70,7 +70,7 @@ class Bunsetsu:
 
 @dataclass
 class CharToken:
-    """A single character with its timestamp from ElevenLabs."""
+    """A single character with its timestamp from the transcript JSON."""
     text: str
     start: float
     end: float
@@ -162,7 +162,7 @@ class Cue:
 # ── JSON loading ──────────────────────────────────────────────────────────────
 
 def load_chars(json_path: str) -> list[CharToken]:
-    """Load character tokens from ElevenLabs JSON, filtering non-word items.
+    """Load character tokens from transcript JSON, filtering non-word items.
 
     Multi-character tokens (e.g. '。API') are split into individual characters
     with linearly interpolated timestamps.
@@ -181,7 +181,7 @@ def load_chars(json_path: str) -> list[CharToken]:
         speaker = w["speaker_id"]
 
         if len(text) == 1:
-            # Clamp sentence-ending punctuation — ElevenLabs often assigns
+            # Clamp sentence-ending punctuation — providers often assign
             # long silence after a sentence to the punctuation's end time
             if text in SENTENCE_ENDERS and end - start > 0.2:
                 end = start + 0.1
@@ -345,7 +345,7 @@ def _make_bunsetsu(chars: list[CharToken], morphs: list[tuple], speaker: str) ->
 # ── Bunsetsu loading (JSON → all_bunsetsu) ───────────────────────────────────
 
 def load_bunsetsu(json_path: str) -> list[Bunsetsu]:
-    """Load an ElevenLabs JSON file and return all bunsetsu."""
+    """Load an transcript JSON file and return all bunsetsu."""
     chars = load_chars(json_path)
     speaker_runs = split_by_speaker(chars)
 

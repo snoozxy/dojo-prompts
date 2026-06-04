@@ -36,11 +36,11 @@ Get the video file path from the argument or ask the user.
 
 Look for input sources in this priority order:
 
-**1. Scribe JSON file (preferred)** — Check for a `.json` file alongside the video with the same basename:
+**1. transcript JSON file (preferred)** — Check for a `.json` file alongside the video with the same basename:
 ```bash
 ls "${VIDEO_DIR}/${VIDEO_STEM}.json" 2>/dev/null
 ```
-JSON gives the most accurate speech gap detection because it has character-level timestamps from ElevenLabs Scribe.
+JSON gives the most accurate speech gap detection because it has character-level timestamps from the transcript provider (ElevenLabs Scribe or Soniox).
 
 **2. External SRT file (fallback)** — Check for a `.srt` file alongside the video:
 ```bash
@@ -74,7 +74,7 @@ mv out_condense/*.mp3 "${VIDEO_DIR}/"
 rm -rf out_condense/
 ```
 
-**Do NOT delete the Scribe JSON file** — it may be needed by other workflows.
+**Do NOT delete the transcript JSON file** — it may be needed by other workflows.
 
 ### 5. Report results
 

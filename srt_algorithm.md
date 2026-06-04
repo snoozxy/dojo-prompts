@@ -1,6 +1,6 @@
 # SRT Algorithm Design
 
-This document explains the subtitle generation pipeline in `scripts/srt_common.py`, `scripts/srt_watch.py`, and `scripts/srt_translate.py`. It converts ElevenLabs Scribe JSON (character-level timestamps for Japanese) into SRT subtitles with natural line breaks.
+This document explains the subtitle generation pipeline in `scripts/srt_common.py`, `scripts/srt_watch.py`, and `scripts/srt_translate.py`. It converts transcript JSON (character-level timestamps for Japanese) into SRT subtitles with natural line breaks.
 
 The same bunsetsu segmentation and Anki sentence-splitting algorithm is also built directly into [mattvsjapan's fork of subs2cia](https://github.com/mattvsjapan/subs2cia), which uses it for JSON-based SRS card generation.
 
@@ -10,7 +10,7 @@ The scripts produce **two SRT variants** from the same bunsetsu data:
 
 ## Input
 
-ElevenLabs returns **character-level** timestamps for Japanese — each character (or sometimes multi-character token like `。API`) gets its own `start`/`end` time, plus a `speaker_id` and `type` (word, spacing, audio_event). Multi-character tokens are split into individual characters with linearly interpolated timestamps.
+The transcript JSON comes from one of two speech-to-text providers — **ElevenLabs Scribe v2** or **Soniox** — normalized to a single canonical shape by `scripts/transcribe.py`. Both return **character-level** timestamps for Japanese: each character (or sometimes a multi-character token like `。API`) gets its own `start`/`end` time, plus a `speaker_id` and `type` (word, spacing, audio_event). Multi-character tokens are split into individual characters with linearly interpolated timestamps.
 
 ## Pipeline Overview
 
@@ -190,8 +190,8 @@ Install: `pip install fugashi unidic-lite`
 ## Usage
 
 ```bash
-python3.11 scripts/srt_watch.py <elevenlabs_scribe.json>
-python3.11 scripts/srt_translate.py <elevenlabs_scribe.json>
+python3.11 scripts/srt_watch.py <transcript.json>
+python3.11 scripts/srt_translate.py <transcript.json>
 ```
 
 Pass `--html` to either script to also generate an HTML debug visualization.
@@ -202,5 +202,5 @@ Outputs:
 
 Anki card generation is handled directly by subs2cia:
 ```bash
-subs2cia srs -i video.mp4 scribe_output.json -p 500 -N -d out_srs --export-header-row
+subs2cia srs -i video.mp4 transcript.json -p 500 -N -d out_srs --export-header-row
 ```

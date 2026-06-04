@@ -13,14 +13,14 @@ Select the work dir with the global `--work-dir <path>` flag (or the
 
 Modes:
     make-workdir <input_path>      Print WORKDIR/OUTPUT/OUTPUT_ALT for an input.
-    prepare <input_path>           Parse Scribe JSON or SRT, init state.
+    prepare <input_path>           Parse transcript JSON or SRT, init state.
     next-window [source_language]  Build window brief (premise + recent + window).
     accept <json_path>             Validate/repair JSON, advance cursor.
     fallback                       Force-accept the current window with placeholder
                                    summaries and log it to failed_windows.txt.
     finalize <output_srt_path>     Build final summary SRT from accepted chunks.
 
-`prepare` accepts either a Scribe JSON (preferred — split on punctuation,
+`prepare` accepts either a transcript JSON (preferred — split on punctuation,
 speaker change, or long pauses) or an SRT (one block = one sentence). It also
 clears stale state in the work dir, guarded by a `.primed-summaries-workdir`
 ownership marker so it can never delete unrelated files. The episode subagent
@@ -130,7 +130,7 @@ def parse_srt(srt_path):
 
 
 def parse_scribe_json(json_path):
-    """Parse a Scribe JSON file into sentence-level blocks.
+    """Parse a transcript JSON file into sentence-level blocks.
 
     Splits on sentence-ending punctuation, speaker changes, and pauses
     >= PAUSE_THRESHOLD seconds. Each block has {timecode, start, end, text}.
@@ -188,7 +188,7 @@ def parse_scribe_json(json_path):
 
 
 def parse_input(path):
-    """Parse either a Scribe JSON or an SRT into a list of blocks."""
+    """Parse either a transcript JSON or an SRT into a list of blocks."""
     lower = path.lower()
     if lower.endswith('.json'):
         return parse_scribe_json(path)

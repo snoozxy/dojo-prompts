@@ -43,6 +43,8 @@ Then immediately ask what outputs they want:
 >
 > You can pick any combination.
 
+Also ask **which speech-to-text provider to use — ElevenLabs Scribe v2 or Soniox** — and make sure the matching API key is set (`$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`). Ask this now so the run doesn't pause mid-way.
+
 Wait for the user to answer before starting any work.
 
 ### 2. Run everything
@@ -76,20 +78,22 @@ Rules for renaming:
 - Include season/year if relevant (e.g., `_s2`, `_2024`)
 - Only add episode numbers (`_01`, `_02`) when there are **multiple videos** in a series. A single standalone video does not need a number suffix.
 
-**Transcribe** — This always runs. Use the **create-srt** skill's steps 1-2 to transcribe each video with ElevenLabs Scribe v2 and produce the Scribe JSON file. Read `create-srt.md` (in the same directory as this file). The JSON is the foundation for all other outputs.
+**Transcribe** — This always runs. Use the **create-srt** skill's steps 1-2 to transcribe each video with the chosen speech-to-text provider (ElevenLabs Scribe v2 or Soniox) and produce the transcript JSON file. Read `create-srt.md` (in the same directory as this file). The JSON is the foundation for all other outputs.
+
+> Because this step runs without further interaction, **ask which provider to use (and confirm the matching API key is set) back in step 1**, together with the question about which outputs they want — don't pause mid-run to ask.
 
 **Japanese subtitles** (if selected) — Run `srt_watch.py` on the JSON with `-o` to name the output after the video file:
 ```bash
 python3 dojo-prompts/scripts/srt_watch.py -o <video_stem> <json_file_path>
 ```
 
-**English subtitles** (if selected) — Use the **translate-srt** skill. Read the full skill at `translate-srt.md` (in the same directory as this file) and follow its instructions, passing the Scribe JSON file. Use `-o` to name the output after the video file (not the JSON). The intermediate Japanese `.translate.srt` should be deleted after translation is complete.
+**English subtitles** (if selected) — Use the **translate-srt** skill. Read the full skill at `translate-srt.md` (in the same directory as this file) and follow its instructions, passing the transcript JSON file. Use `-o` to name the output after the video file (not the JSON). The intermediate Japanese `.translate.srt` should be deleted after translation is complete.
 
 **Condensed audio** (if selected) — Use the **condensed-audio** skill. Read the full skill at `condensed-audio.md` (in the same directory as this file) and follow its instructions.
 
 **Anki deck** (if selected) — Use the **anki** skill. Read the full skill at `anki.md` (in the same directory as this file) and follow its instructions.
 
-**Primed-listening summary** (if selected) — Use the **primed-summaries** skill. Read the full skill at `primed-summaries.md` (in the same directory as this file) and follow its instructions, passing the Scribe JSON file.
+**Primed-listening summary** (if selected) — Use the **primed-summaries** skill. Read the full skill at `primed-summaries.md` (in the same directory as this file) and follow its instructions, passing the transcript JSON file.
 
 ### 3. Report results
 

@@ -43,7 +43,7 @@ This keeps the main context lean (only metadata + status messages).
 ### 1. Gather Inputs
 
 Determine:
-- **Input file** — look for a Scribe JSON file (`.json`) first, then fall back to an existing SRT. **Always prefer JSON over SRT** — the JSON produces better translation cues via `srt_translate.py` because it has access to the full bunsetsu segmentation pipeline. Only use an existing SRT if no JSON is available.
+- **Input file** — look for a transcript JSON file (`.json`) first, then fall back to an existing SRT. **Always prefer JSON over SRT** — the JSON produces better translation cues via `srt_translate.py` because it has access to the full bunsetsu segmentation pipeline. Only use an existing SRT if no JSON is available.
 - **Source language** — from argument, or read just the first ~30 lines of the SRT to auto-detect
 - **Target language** — from argument or ask the user
 - **Translation style notes** — ask if the user has specific preferences (though the default is faithful/literal for language learning)
@@ -140,13 +140,13 @@ If the original filename already has a language code (e.g., `movie.ja.srt`), rep
 
 ### 8. Clean Up Intermediate SRT
 
-If the input was an ElevenLabs Scribe JSON file (not an existing SRT), the `srt_translate.py` script generated an intermediate `.translate.srt` file. Delete it — only the translated `.en.srt` should remain:
+If the input was an transcript JSON file (not an existing SRT), the `srt_translate.py` script generated an intermediate `.translate.srt` file. Delete it — only the translated `.en.srt` should remain:
 
 ```bash
 rm <video_stem>.translate.srt
 ```
 
-**Do NOT delete the Scribe JSON file** — it may be needed by other workflows.
+**Do NOT delete the transcript JSON file** — it may be needed by other workflows.
 
 ### 9. Spot Check
 

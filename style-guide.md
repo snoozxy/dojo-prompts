@@ -30,17 +30,11 @@ Ask the user: **Do you already have transcripts or subtitle files for your langu
 
 - **If yes** — Ask for the file path(s) or directory and read them.
 - **If no** — Ask: **Do you have video/audio files of them that need to be transcribed?**
-  - **If yes** — Help transcribe them with ElevenLabs Scribe. Check if `$ELEVENLABS_API_KEY` is set; if not, ask the user to paste their key. Transcribe each file:
+  - **If yes** — **Ask which speech-to-text provider to use (ElevenLabs Scribe or Soniox)**, then transcribe each file with the helper. Make sure the chosen provider's key is set (`$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`); if not, ask the user to paste it.
     ```bash
-    curl -s -X POST "https://api.elevenlabs.io/v1/speech-to-text" \
-      -H "xi-api-key: $ELEVENLABS_API_KEY" \
-      -F "model_id=scribe_v2" \
-      -F "file=@video.mp4" \
-      -F "language_code=ja" \
-      -F "timestamps_granularity=word" \
-      > video.json
+    python3 dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox> --language ja video.mp4
     ```
-    Extract the `text` field from each JSON file for analysis.
+    This writes `video.json`. Extract the `text` field from each JSON file for analysis.
   - **If no** — Ask the user to provide a **YouTube channel URL or playlist URL** for their language parent. Then:
     1. List available videos with yt-dlp
     2. Select roughly 20 hours of long-form, unscripted content (prioritize livestreams, podcasts, interviews — avoid short or scripted videos)

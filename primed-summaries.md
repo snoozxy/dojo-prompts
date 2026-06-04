@@ -20,7 +20,7 @@ allowed-tools:
 
 # Primed Summaries
 
-Take one or more existing SRTs (or Scribe JSON files) in any source language and
+Take one or more existing SRTs (or transcript JSON files) in any source language and
 produce, for each, a **summary SRT** — a smaller SRT where each entry covers many
 original sentences and the text is a 1–3 sentence **English summary** of what's
 said in that span. This is not a translation: the AI groups sentences into
@@ -31,10 +31,10 @@ audio for the chunk → next preview → ...).
 
 ## Usage
 
-The user provides one or more paths to Scribe JSON files or SRT files. Optionally
+The user provides one or more paths to transcript JSON files or SRT files. Optionally
 the source language can be specified inline (e.g. `/primed-summaries file.json Japanese`).
 
-**Always prefer JSON over SRT** — if a Scribe JSON file exists alongside the SRT
+**Always prefer JSON over SRT** — if a transcript JSON file exists alongside the SRT
 (same basename), use the JSON. Only use an SRT directly if no JSON is available.
 
 ## Architecture
@@ -88,7 +88,7 @@ job is only to set up each episode and spawn its subagent.
 ### 1. Gather and resolve inputs
 
 For each path the user gave:
-- If it's an SRT and a Scribe JSON with the same basename exists alongside it,
+- If it's an SRT and a transcript JSON with the same basename exists alongside it,
   use the JSON instead. Otherwise use the path as given.
 - Reject the batch if two inputs resolve to the **same absolute path**.
 
@@ -218,4 +218,4 @@ Inputs you were given:
   overlaps. The helper repairs minor gaps but rejects overlaps.
 - **3–15 sentences per chunk** — short enough to summarize tightly, long enough to
   be a meaningful preview.
-- **Never delete the Scribe JSON.**
+- **Never delete the transcript JSON.**

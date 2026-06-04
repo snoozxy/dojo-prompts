@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.11
 """
-Generate translation-optimized SRT subtitles from ElevenLabs Scribe JSON.
+Generate translation-optimized SRT subtitles from transcript JSON.
 Merges Anki sentence cues into larger blocks (≤20 MeCab tokens) for translation.
 """
 
@@ -65,7 +65,7 @@ def anki_to_translate_cues(anki_cues: list[Cue]) -> list[Cue]:
 
 def main():
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <elevenlabs_scribe.json>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <transcript.json>", file=sys.stderr)
         sys.exit(1)
 
     html_mode = "--html" in sys.argv
@@ -84,7 +84,7 @@ def main():
             i += 1
 
     if not remaining:
-        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <elevenlabs_scribe.json>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} [--html] [-o output_stem] <transcript.json>", file=sys.stderr)
         sys.exit(1)
 
     json_path = remaining[0]

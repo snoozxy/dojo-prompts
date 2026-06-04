@@ -53,7 +53,7 @@ Adapt track selection to whatever language the user specifies. Use the same ffpr
 
 Before running subs2cia, check for input sources in priority order:
 
-**1. Scribe JSON files (preferred)** — Check if there are ElevenLabs Scribe JSON files alongside the videos:
+**1. transcript JSON files (preferred)** — Check if there are transcript JSON files alongside the videos:
 ```bash
 ls "$SOURCE_DIR"/*.json 2>/dev/null
 ```
@@ -77,7 +77,7 @@ ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=langua
 
 ```bash
 # With JSON (preferred — MeCab sentence segmentation)
-subs2cia srs -i "video.mp4" "scribe_output.json" -p 500 -N -d out_srs --export-header-row
+subs2cia srs -i "video.mp4" "transcript.json" -p 500 -N -d out_srs --export-header-row
 
 # With SRT (fallback)
 subs2cia srs -b -i "*.mp4" -ai 0 -si 0 -p 500 -N -d out_srs --export-header-row
@@ -100,7 +100,7 @@ subs2cia srs -b -i "*.mp4" -ai 0 -si 0 -p 500 -N -d out_srs --export-header-row
 ## Workflow
 
 1. Get the source directory from the user
-2. **Check available input sources** — look for Scribe JSON files first, then external SRT/ASS, then embedded tracks (see priority order above)
+2. **Check available input sources** — look for transcript JSON files first, then external SRT/ASS, then embedded tracks (see priority order above)
 3. **Identify audio tracks** — use ffprobe to find the target language audio stream index (default: Japanese)
 4. **Rename source video files if needed** — skip if filenames are already ASCII-safe. Only add episode numbers (`_01`, `_02`) when there are multiple videos. See `process-content.md` for full renaming rules.
 5. Navigate to the source directory
@@ -108,7 +108,7 @@ subs2cia srs -b -i "*.mp4" -ai 0 -si 0 -p 500 -N -d out_srs --export-header-row
 7. **Generate episode summaries** - for each TSV, read subtitle text and generate a translation briefing (see Episode Summary Format below), then prepend it to every row's `context` column. Use subagents to process all TSVs in parallel.
 8. **Combine all TSV files** into a single `combined.tsv`
 9. **Export as .apkg** - package the combined TSV and all media files into an Anki .apkg deck, saved to the source directory
-10. **Clean up** - delete the `out_srs/` directory and all intermediate files, leaving only the .apkg. If an `.anki.srt` was generated from a Scribe JSON file, delete it too — the SRT is an intermediate artifact, not a final output. **Do NOT delete the Scribe JSON file** — it may be needed by other workflows.
+10. **Clean up** - delete the `out_srs/` directory and all intermediate files, leaving only the .apkg. If an `.anki.srt` was generated from a transcript JSON file, delete it too — the SRT is an intermediate artifact, not a final output. **Do NOT delete the transcript JSON file** — it may be needed by other workflows.
 11. Report the output location to the user
 
 ## File Naming Convention
@@ -153,7 +153,7 @@ done
 
 # 4. Run subs2cia — prefer JSON, fall back to SRT
 # With JSON (preferred):
-subs2cia srs -i "video.mp4" "scribe_output.json" -p 500 -N -d out_srs --export-header-row
+subs2cia srs -i "video.mp4" "transcript.json" -p 500 -N -d out_srs --export-header-row
 # With SRT (fallback):
 subs2cia srs -b -i "*.mp4" -ai <audio_index> -si <subtitle_index> -p 500 -N -d out_srs --export-header-row
 

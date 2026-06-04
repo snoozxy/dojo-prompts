@@ -35,6 +35,7 @@ command -v ffprobe >/dev/null 2>&1 || echo "MISSING: ffprobe"
 # Python packages
 pip show fugashi >/dev/null 2>&1 || echo "MISSING: fugashi"
 pip show genanki >/dev/null 2>&1 || echo "MISSING: genanki"
+pip show requests >/dev/null 2>&1 || echo "MISSING: requests"
 ```
 
 **Special case — subs2cia:** Even if subs2cia is installed, you must verify it's the correct fork **and that it's up to date**. Check with:
@@ -65,5 +66,5 @@ If a required tool is missing, just install it and move on. No need to ask — b
   # e.g. 「機械オンチに「API」を説明する動画」→ kikai_onchi_ni_api_wo_setsumei_suru_douga_01.mp4
   ```
 - **subs2cia**: Any step that uses subs2cia must use [mattvsjapan's fork](https://github.com/mattvsjapan/subs2cia). Install with: `pip install git+https://github.com/mattvsjapan/subs2cia.git`
-- **ElevenLabs API key**: If `$ELEVENLABS_API_KEY` is not set, ask the user to paste their key before transcribing.
+- **Transcription provider**: Any skill that transcribes audio/video (create-srt, find-mistakes, style-guide) supports two providers — **ElevenLabs Scribe v2** and **Soniox**. Ask the user which to use each time, then run `dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox>`. Both write the same canonical transcript JSON, so all downstream steps are identical. Make sure the chosen provider's key is set first — `$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`; if not, ask the user to paste it before transcribing.
 - **Primed Listening**: `dojo-prompts/primed-listening.lua` is an mpv script, not an AI skill. To install it, copy it to `~/.config/mpv/scripts/`.

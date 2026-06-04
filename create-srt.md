@@ -1,8 +1,9 @@
 ---
 name: create-srt
 description: |
-  Generate Japanese SRT subtitles from a video file using ElevenLabs Scribe v2
-  and MeCab for natural bunsetsu boundaries.
+  Generate Japanese SRT subtitles from a video file using a speech-to-text
+  provider (ElevenLabs Scribe v2 or Soniox) and MeCab for natural bunsetsu
+  boundaries.
 allowed-tools:
   - Bash
   - Read
@@ -13,7 +14,7 @@ allowed-tools:
 
 # Create SRT
 
-Generate natural Japanese subtitles from a video file using ElevenLabs Scribe v2 and MeCab bunsetsu segmentation.
+Generate natural Japanese subtitles from a video file using a speech-to-text provider (ElevenLabs Scribe v2 or Soniox) and MeCab bunsetsu segmentation.
 
 ## Usage
 
@@ -22,47 +23,46 @@ Run `/create-srt <video_file>` to generate an SRT file from a video.
 ## Requirements
 
 ```
-pip install fugashi unidic-lite
+pip install fugashi unidic-lite requests
 ```
 
-An ElevenLabs API key with Scribe access.
+An API key for whichever provider you choose:
+- **ElevenLabs** — `$ELEVENLABS_API_KEY` (Scribe access)
+- **Soniox** — `$SONIOX_API_KEY`
 
 ## Workflow
 
-### 1. Get the video file path and API key
+### 1. Get the video file path and choose a provider
 
 Get the video file path from the argument or ask the user.
 
-Check if `$ELEVENLABS_API_KEY` is set. If not, ask the user to paste their ElevenLabs API key. Store it as a shell variable for the duration of the session:
+**Ask the user which speech-to-text provider to use: ElevenLabs Scribe v2 or Soniox.** Both produce the same transcript JSON, so every downstream step is identical — the choice only affects transcription quality/speed and which API key is needed.
+
+Make sure the chosen provider's key is set. If not, ask the user to paste it and export it for the session:
 
 ```bash
-export ELEVENLABS_API_KEY="<key from user>"
+export ELEVENLABS_API_KEY="<key from user>"   # if ElevenLabs
+export SONIOX_API_KEY="<key from user>"        # if Soniox
 ```
 
-### 2. Transcribe with ElevenLabs Scribe v2
+### 2. Transcribe
 
-Upload the video to the ElevenLabs Speech-to-Text API with word-level timestamps and diarization enabled:
+Run the transcribe helper with the chosen provider. It transcribes with character-level timestamps and diarization, then writes a transcript JSON in the canonical shape (same shape regardless of provider). Use `-o` to name the output after the video file:
 
 ```bash
-curl -s -X POST "https://api.elevenlabs.io/v1/speech-to-text" \
-  -H "xi-api-key: $ELEVENLABS_API_KEY" \
-  -F "model_id=scribe_v2" \
-  -F "file=@video.mp4" \
-  -F "language_code=ja" \
-  -F "timestamps_granularity=word" \
-  -F "diarize=true" \
-  > video.json
+python3 dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox> --language ja -o <video_stem> video.mp4
 ```
 
-Name the JSON output after the video file (e.g., `kikai_onchi_01.mp4` → `kikai_onchi_01.json`) so all outputs share a consistent basename.
+This produces `<video_stem>.json` (e.g., `kikai_onchi_01.mp4` → `kikai_onchi_01.json`) so all outputs share a consistent basename.
 
-**Important:** The `-s` (silent) flag is required. Without it, curl's progress output gets written into the JSON file and corrupts it.
-
-Files up to 3GB are supported. This can take a few minutes for longer videos.
+Notes:
+- **ElevenLabs** is a single synchronous request. Files up to 3GB; longer videos can take a few minutes.
+- **Soniox** runs an async job (upload → transcribe → poll). The helper handles polling and deletes the uploaded file from your account when done.
+- Do not request `additional_formats` — we build the SRT ourselves from the raw word data.
 
 ### What the output looks like
 
-The response JSON has this structure:
+Both providers write the same canonical JSON structure:
 
 ```json
 {
@@ -112,14 +112,14 @@ MeCab with UniDic segments Japanese text into bunsetsu (phrase units), so subtit
 
 Run the conversion script, using `-o` to name the output after the video file:
 ```bash
-python3 dojo-prompts/scripts/srt_watch.py -o <video_stem> scribe_output.json
+python3 dojo-prompts/scripts/srt_watch.py -o <video_stem> <video_stem>.json
 ```
 
 This produces `<video_stem>.srt` alongside the JSON file.
 
 ### 4. Preserve the JSON
 
-**Do NOT delete the Scribe JSON file.** It is needed by other workflows (Anki deck generation, English translation). Only the SRT is the final output of this skill, but the JSON must be kept.
+**Do NOT delete the transcript JSON file.** It is needed by other workflows (Anki deck generation, English translation). Only the SRT is the final output of this skill, but the JSON must be kept.
 
 ## Tuning parameters
 

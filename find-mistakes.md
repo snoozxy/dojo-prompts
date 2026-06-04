@@ -39,23 +39,13 @@ Rules:
 Ask the user: **Do you already have a transcript of yourself speaking Japanese?**
 
 - **If yes** — Ask for the file path(s) and read them.
-- **If no** — Ask if they have audio/video recordings of themselves speaking. If they do, help them transcribe the files using ElevenLabs Scribe:
+- **If no** — Ask if they have audio/video recordings of themselves speaking. If they do, **ask which speech-to-text provider to use (ElevenLabs Scribe or Soniox)** and transcribe each file with the helper:
 
 ```bash
-# Check for API key
-echo $ELEVENLABS_API_KEY
-
-# Transcribe each file
-curl -s -X POST "https://api.elevenlabs.io/v1/speech-to-text" \
-  -H "xi-api-key: $ELEVENLABS_API_KEY" \
-  -F "model_id=scribe_v2" \
-  -F "file=@recording.mp4" \
-  -F "language_code=ja" \
-  -F "timestamps_granularity=word" \
-  > recording.json
+python3 dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox> --language ja recording.mp4
 ```
 
-If `$ELEVENLABS_API_KEY` is not set, ask the user to paste their key.
+This writes `recording.json`. Make sure the chosen provider's key is set first (`$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`); if not, ask the user to paste it.
 
 Extract the `text` field from each JSON file and combine them into a single transcript for analysis.
 
