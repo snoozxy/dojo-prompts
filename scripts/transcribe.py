@@ -68,46 +68,80 @@ def transcribe_elevenlabs(audio_path: str, language: str) -> dict:
 SONIOX_API = "https://api.soniox.com/v1"
 
 
-def transcribe_soniox(audio_path: str, language: str) -> dict:
+def transcribe_soniox(audio_path: str, language: str, state_path: str) -> dict:
     """Soniox stt-async-v4. Runs the async flow and normalizes the token stream
-    into the canonical Scribe shape."""
+    into the canonical Scribe shape.
+
+    Persists file_id and transcription_id to *state_path* immediately after each
+    step so a restart can resume polling the existing job rather than re-uploading.
+    """
     key = os.environ.get("SONIOX_API_KEY")
     if not key:
         sys.exit("SONIOX_API_KEY is not set.")
     auth = {"Authorization": f"Bearer {key}"}
 
-    # 1. upload
-    with open(audio_path, "rb") as f:
-        r = requests.post(f"{SONIOX_API}/files", headers=auth,
-                          files={"file": f}, timeout=3600)
-    if not r.ok:
-        sys.exit(f"Soniox upload error {r.status_code}: {r.text[:500]}")
-    file_id = r.json()["id"]
+    # Load existing state if available (allows resuming after a crash).
+    state = {}
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state = json.load(f)
+            print(f"Resuming Soniox job from {state_path}")
+        except (json.JSONDecodeError, OSError):
+            state = {}
 
-    # 2. create transcription
-    r = requests.post(
-        f"{SONIOX_API}/transcriptions",
-        headers={**auth, "Content-Type": "application/json"},
-        json={
-            "model": "stt-async-v4",
-            "file_id": file_id,
-            "language_hints": [language],
-            "enable_speaker_diarization": True,
-        },
-        timeout=120,
-    )
-    if not r.ok:
-        sys.exit(f"Soniox create error {r.status_code}: {r.text[:500]}")
-    tid = r.json()["id"]
+    def save_state():
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
 
-    # 3. poll until done
+    file_id = state.get("file_id")
+    tid = state.get("transcription_id")
+
+    if not file_id:
+        # 1. upload
+        print("Uploading audio to Soniox...")
+        with open(audio_path, "rb") as f:
+            r = requests.post(f"{SONIOX_API}/files", headers=auth,
+                              files={"file": f}, timeout=3600)
+        if not r.ok:
+            sys.exit(f"Soniox upload error {r.status_code}: {r.text[:500]}")
+        file_id = r.json()["id"]
+        state["file_id"] = file_id
+        save_state()
+
+    if not tid:
+        # 2. create transcription
+        r = requests.post(
+            f"{SONIOX_API}/transcriptions",
+            headers={**auth, "Content-Type": "application/json"},
+            json={
+                "model": "stt-async-v4",
+                "file_id": file_id,
+                "language_hints": [language],
+                "enable_speaker_diarization": True,
+            },
+            timeout=120,
+        )
+        if not r.ok:
+            sys.exit(f"Soniox create error {r.status_code}: {r.text[:500]}")
+        tid = r.json()["id"]
+        state["transcription_id"] = tid
+        save_state()
+
+    # 3. poll until done (exponential backoff: 2s → 10s after 60s)
+    print(f"Polling Soniox transcription {tid}...")
     status = None
-    for _ in range(1800):  # up to ~1h at 2s intervals
+    elapsed = 0
+    poll_interval = 2
+    for _ in range(3600):
         r = requests.get(f"{SONIOX_API}/transcriptions/{tid}", headers=auth, timeout=60)
         status = r.json().get("status")
         if status in ("completed", "error"):
             break
-        time.sleep(2)
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+        if elapsed >= 60 and poll_interval < 10:
+            poll_interval = 10
     if status != "completed":
         sys.exit(f"Soniox transcription did not complete: status={status} detail={r.text[:500]}")
 
@@ -122,6 +156,12 @@ def transcribe_soniox(audio_path: str, language: str) -> dict:
         requests.delete(f"{SONIOX_API}/transcriptions/{tid}", headers=auth, timeout=60)
         requests.delete(f"{SONIOX_API}/files/{file_id}", headers=auth, timeout=60)
     except requests.RequestException:
+        pass
+
+    # Remove state file — job is complete.
+    try:
+        os.remove(state_path)
+    except OSError:
         pass
 
     return soniox_to_canonical(raw)
@@ -201,7 +241,8 @@ def main():
     if args.provider == "elevenlabs":
         data = transcribe_elevenlabs(args.audio, args.language)
     else:
-        data = transcribe_soniox(args.audio, args.language)
+        state_path = f"{stem}.transcription_state.json"
+        data = transcribe_soniox(args.audio, args.language, state_path)
 
     tmp_path = out_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
