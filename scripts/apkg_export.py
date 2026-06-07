@@ -46,6 +46,7 @@ model = genanki.Model(
 
 deck = genanki.Deck(deck_id, deck_name)
 media_files = []
+note_count = 0
 
 with open(tsv_path, encoding='utf-8') as f:
     reader = csv.DictReader(f, delimiter='\t')
@@ -84,10 +85,11 @@ with open(tsv_path, encoding='utf-8') as f:
             ],
         )
         deck.add_note(note)
+        note_count += 1
         media_files.append(audio_path)
 
 output_path = os.path.join(dest_dir, deck_name + '.apkg')
 package = genanki.Package(deck)
 package.media_files = media_files
 package.write_to_file(output_path)
-print(f'Exported {len(media_files)} cards to {output_path}')
+print(f'Exported {note_count} cards ({len(media_files)} media files) to {output_path}')

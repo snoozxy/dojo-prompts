@@ -168,8 +168,7 @@ subs2cia srs -b -i "*.mp4" -ai <audio_index> -si <subtitle_index> -p 500 -N -d o
 python3 dojo-prompts/scripts/prepend_summary.py out_srs/<filename>.tsv "EPISODE_SUMMARY_HERE"
 
 # 6. Combine all TSV files into a single file
-# Use head -q to suppress ==> filename <== separators between files
-head -q -1 out_srs/*.tsv | head -1 > out_srs/combined.tsv && tail -n +2 -q out_srs/*.tsv >> out_srs/combined.tsv
+python3 dojo-prompts/scripts/combine_tsv.py out_srs/ out_srs/combined.tsv
 
 # 7. Export as .apkg
 #    Output goes to $SOURCE_DIR/<show_name>.apkg

@@ -69,10 +69,10 @@ rename them to romanized lowercase with underscores before any processing
 
 **480p transcode** (if user chose 480p for screenshots):
 ```bash
-ffmpeg -i "input.mp4" -vf scale=-2:480 -c:v libx264 -crf 23 -c:a copy "input_480p.mp4"
+python3 dojo-prompts/scripts/transcode_batch.py "$VIDEO_DIR" "$VIDEO_DIR/480p" --height 480
 ```
-Transcode all source videos before proceeding. Use the transcoded versions for
-subs2cia only — keep the originals.
+This transcodes all videos in parallel (2 workers by default). Use the
+transcoded versions for subs2cia only — keep the originals.
 
 ### 3. Search jimaku.cc for subtitles
 
@@ -105,35 +105,36 @@ python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --episode 1 --out 
 
 ### 5. Match and sync subtitles
 
-For each video file, find the best subtitle match using `ffsubsync`. Run this
-for every `.srt`/`.ass` candidate against the video:
+Use `sync_subs.py` to test all candidates in parallel and automatically pick
+the best match:
 
 ```bash
-# Try each candidate — capture output to parse the offset
-ffsubsync "video.mp4" -i "candidate.srt" -o "candidate.synced.srt" 2>&1
+# Test all candidates for episode 1, write best match to synced_subs/
+python3 dojo-prompts/scripts/sync_subs.py \
+  "video_01.mkv" subs_download/ \
+  -o synced_subs/video_01.srt --episode 1
 ```
 
-Parse the offset from the output line that reads:
-```
-Offset seconds: X.XX
-```
+The script runs ffsubsync on every candidate concurrently, prints a ranked
+table of results, and copies the best match to the output path.
 
-**Decision tree per video:**
+**Decision tree (applied automatically):**
 
 | Abs offset | Result |
 |---|---|
-| ≤ 2s | **Perfect match** — use the synced file, no concerns |
-| 2s – 30s | **Good sync** — use the synced file, note the offset to the user |
-| 30s – 300s | **Questionable** — try other candidates first; use only if nothing better |
-| > 300s or ffsubsync error | **Bad match** — discard this candidate |
+| ≤ 2s | **Perfect match** |
+| 2s – 30s | **Good sync** |
+| 30s – 300s | **Questionable** — used only if nothing better |
+| > 300s or error | **Discarded** |
 
-If multiple candidates exist (different fansub groups), try them all and pick
-the one with the smallest absolute offset.
+**For a folder of videos**, test against episode 1 first to identify the best
+subtitle group. Then use `--episode N` for each subsequent episode — most
+series use the same group throughout, so the same source that matched episode 1
+will usually work for the rest. Confirm episode-by-episode only if offsets vary
+significantly.
 
-**For a folder of videos**, run the best-matching subtitle against all episodes:
-most series use consistent subtitle files across episodes, so the same group
-that matched episode 1 will likely work for the rest. Confirm episode-by-episode
-only if offsets vary significantly.
+If `sync_subs.py` exits with code 1 (no candidate passed the threshold), fall
+back to AI transcription for that episode (see step 6).
 
 ### 6. Fallback: AI transcription
 
