@@ -51,15 +51,27 @@ Notes:
 import argparse
 import concurrent.futures
 import glob
+import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
 
+_HW_CACHE_PATH = Path.home() / ".dojo_hw_cache.json"
 
 # ── encoder detection ────────────────────────────────────────────────────────
 
 _GPU_ENCODERS = ["h264_nvenc", "h264_amf", "h264_qsv"]
+
+
+def _load_hw_cache():
+    """Return recommendations dict from ~/.dojo_hw_cache.json, or {}."""
+    try:
+        with open(_HW_CACHE_PATH, encoding="utf-8") as f:
+            return json.load(f).get("recommendations", {})
+    except Exception:
+        return {}
 
 
 def _test_encoder(name):
@@ -72,9 +84,15 @@ def _test_encoder(name):
 
 
 def _resolve_encoder(requested):
-    """Return the encoder name to use. 'auto' picks best available GPU encoder."""
+    """Return the encoder name to use. 'auto' checks cache then live-tests."""
     if requested and requested != "auto":
         return requested
+    # Check cache first — avoids ~10s of encoder tests on every run
+    cached = _load_hw_cache().get("FFMPEG_ENCODER")
+    if cached and cached != "libx264":
+        sys.stderr.write(f"Using cached encoder: {cached} (run hw_probe.py --force to refresh)\n")
+        return cached
+    # Cache miss or CPU-only — live test
     for enc in _GPU_ENCODERS:
         try:
             if _test_encoder(enc):
@@ -198,8 +216,8 @@ def main():
     elif encoder_req == "auto":
         sys.stderr.write("No GPU encoder found, using libx264\n")
 
-    # Resolve hwaccel: CLI > env var
-    hwaccel = args.hw_decode or os.environ.get("FFMPEG_HWACCEL", "")
+    # Resolve hwaccel: CLI > env var > cache
+    hwaccel = args.hw_decode or os.environ.get("FFMPEG_HWACCEL") or _load_hw_cache().get("FFMPEG_HWACCEL", "")
     if hwaccel == "auto":
         hwaccel = "cuda" if encoder == "h264_nvenc" else \
                   "d3d11va" if encoder in ("h264_amf",) else \

@@ -15,14 +15,19 @@ Environment vars the tools will read (set these once in your shell profile):
     FFMPEG_HWACCEL=cuda      Hardware accelerator for transcode_batch.py decode
 """
 
+import datetime
 import json
 import os
 import platform
+from pathlib import Path
 import subprocess
 import sys
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+CACHE_PATH = Path.home() / ".dojo_hw_cache.json"
+CACHE_MAX_AGE_DAYS = 30
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -246,6 +251,33 @@ def recommend(cpu, ram, gpus, ffmpeg_info):
 
 # ── report ────────────────────────────────────────────────────────────────────
 
+def load_cache():
+    """Load cached probe results. Returns None if cache is missing or stale."""
+    if not CACHE_PATH.exists():
+        return None
+    try:
+        with open(CACHE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        generated = datetime.datetime.fromisoformat(data.get("generated_at", "2000-01-01"))
+        age = datetime.datetime.now() - generated
+        if age.days > CACHE_MAX_AGE_DAYS:
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def save_cache(data):
+    """Save probe results to cache file."""
+    try:
+        payload = dict(data)
+        payload["generated_at"] = datetime.datetime.now().isoformat()
+        with open(CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as e:
+        sys.stderr.write(f"Warning: could not save hw cache: {e}\n")
+
+
 def full_probe():
     sys.stderr.write("Probing hardware...\n")
     cpu = probe_cpu()
@@ -254,13 +286,16 @@ def full_probe():
     sys.stderr.write("Testing ffmpeg encoders and hwaccels...\n")
     ffmpeg_info = probe_ffmpeg()
     recs = recommend(cpu, ram, gpus, ffmpeg_info)
-    return {
+    data = {
         "cpu": cpu,
         "ram": ram,
         "gpus": gpus,
         "ffmpeg": ffmpeg_info,
         "recommendations": recs,
     }
+    save_cache(data)
+    sys.stderr.write(f"Cache saved to {CACHE_PATH}\n")
+    return data
 
 
 def print_report(data):
@@ -321,9 +356,30 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(description="Probe system hardware for ffmpeg/subs2cia settings.")
     ap.add_argument("--json", action="store_true", help="Output raw JSON instead of report")
+    ap.add_argument("--check", action="store_true",
+                    help="Print cache status and exit (0=fresh, 1=missing/stale)")
+    ap.add_argument("--force", action="store_true", help="Re-probe even if cache is fresh")
     args = ap.parse_args()
 
-    data = full_probe()
+    if args.check:
+        cached = load_cache()
+        if cached:
+            print(f"Cache is fresh ({CACHE_PATH})")
+            sys.exit(0)
+        else:
+            print(f"Cache missing or stale — run hw_probe.py to generate it")
+            sys.exit(1)
+
+    if not args.force:
+        cached = load_cache()
+        if cached:
+            sys.stderr.write(f"Using cached results from {CACHE_PATH} (pass --force to re-probe)\n")
+            data = cached
+        else:
+            data = full_probe()
+    else:
+        data = full_probe()
+
     if args.json:
         print(json.dumps(data, indent=2))
     else:

@@ -22,6 +22,22 @@ When the user asks about any of the following, read the corresponding skill file
 
 When a skill is triggered, read the full skill file first, then follow its workflow step by step.
 
+## Hardware profile (one-time setup)
+
+Before running `process-local` or `anki` skills (any workflow that transcodes video or runs subs2cia on a large batch), check whether the hardware cache exists:
+
+```bash
+python3 dojo-prompts/scripts/hw_probe.py --check
+```
+
+- If it exits **0** (cache is fresh): nothing to do — `transcode_batch.py` and subs2cia read from `~/.dojo_hw_cache.json` automatically.
+- If it exits **1** (missing or stale): run the full probe once. It takes ~30 seconds and caches results for 30 days:
+  ```bash
+  python3 dojo-prompts/scripts/hw_probe.py
+  ```
+
+After the cache exists, all tools auto-use the detected GPU encoder, hardware decode accelerator, and optimal worker count — no env vars needed.
+
 ## Dependency checks
 
 Before running any skill, check that required programs are installed. **Only install something if it's missing.** Do not reinstall programs that are already present.
