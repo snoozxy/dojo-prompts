@@ -47,8 +47,9 @@ All skills also work as plain prompts — paste the contents into any AI chat (C
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) for downloading content
 - A speech-to-text API key for transcription (create-srt, find-mistakes, style-guide) — either an [ElevenLabs API key](https://elevenlabs.io/) with Scribe access (`$ELEVENLABS_API_KEY`) or a [Soniox API key](https://soniox.com/) (`$SONIOX_API_KEY`). You're asked which provider to use each time.
 - [mpv](https://mpv.io/) media player (for primed listening)
-- Python packages: `fugashi`, `unidic-lite`, `genanki`, `requests`
-- [subs2cia](https://github.com/snoozxy/subs2cia) — **you must use this fork**, not the original. It adds context column support and other features used by the subs2srs and condensed audio steps. Install with:
+- Python packages: `fugashi`, `unidic-lite`, `genanki`, `requests`, `ffsubsync` (for local content processing)
+- [subs2cia](https://github.com/snoozxy/subs2cia) — **you must use this fork** (not the original)
+- A [jimaku.cc](https://jimaku.cc) account + API key (`$JIMAKU_API_KEY`) for the local content workflow, not the original. It adds context column support and other features used by the subs2srs and condensed audio steps. Install with:
   ```bash
   pip install git+https://github.com/snoozxy/subs2cia.git
   ```

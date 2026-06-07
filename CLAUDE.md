@@ -10,6 +10,7 @@ When the user asks about any of the following, read the corresponding skill file
 |---|---|
 | "discover content", "find something to watch", "help me find content" | `dojo-prompts/content-discovery.md` |
 | "process this video", "download and transcribe", "process content" | `dojo-prompts/process-content.md` |
+| "process local", "local video", "local file", "downloaded anime", "downloaded movie", "local content" | `dojo-prompts/process-local.md` |
 | "create subtitles", "transcribe this", "make an SRT", "generate subs" | `dojo-prompts/create-srt.md` |
 | "translate subtitles", "translate this SRT", "make English subs" | `dojo-prompts/translate-srt.md` |
 | "make an Anki deck", "subs2srs", "create flashcards" | `dojo-prompts/anki.md` |
@@ -36,6 +37,9 @@ command -v ffprobe >/dev/null 2>&1 || echo "MISSING: ffprobe"
 pip show fugashi >/dev/null 2>&1 || echo "MISSING: fugashi"
 pip show genanki >/dev/null 2>&1 || echo "MISSING: genanki"
 pip show requests >/dev/null 2>&1 || echo "MISSING: requests"
+
+# process-local specific
+pip show ffsubsync >/dev/null 2>&1 || echo "MISSING: ffsubsync (needed for process-local)"
 ```
 
 **Special case — subs2cia:** Even if subs2cia is installed, you must verify it's the correct fork **and that it's up to date**. Check with:
@@ -72,4 +76,5 @@ If a required tool is missing, just install it and move on. No need to ask — b
   ```
 - **subs2cia**: Any step that uses subs2cia must use [snoozxy's fork](https://github.com/snoozxy/subs2cia). Install with: `pip install git+https://github.com/snoozxy/subs2cia.git`
 - **Transcription provider**: Any skill that transcribes audio/video (create-srt, find-mistakes, style-guide) supports two providers — **ElevenLabs Scribe v2** and **Soniox**. Ask the user which to use each time, then run `dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox>`. Both write the same canonical transcript JSON, so all downstream steps are identical. Make sure the chosen provider's key is set first — `$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`; if not, ask the user to paste it before transcribing.
+- **jimaku.cc subtitles**: The `process-local` skill downloads Japanese subtitles from jimaku.cc. Requires `$JIMAKU_API_KEY` (generate at jimaku.cc/account). Use `dojo-prompts/scripts/jimaku_dl.py` for all API calls — search, file listing, and download.
 - **Primed Listening**: `dojo-prompts/primed-listening.lua` is an mpv script, not an AI skill. To install it, copy it to `~/.config/mpv/scripts/`.
