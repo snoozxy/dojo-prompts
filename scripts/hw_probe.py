@@ -176,12 +176,18 @@ def _ffmpeg_available():
 
 
 def test_encoder(name):
-    """Return True if ffmpeg can use this encoder."""
+    """Return True if ffmpeg can use this encoder.
+
+    Uses 256x256 @ 30fps with nv12 pixel format — the minimum that AMD AMF,
+    NVENC, and QSV all accept. 64x64 or nullsrc without a frame rate causes
+    AMF to fail even when the GPU and driver are fine.
+    """
     _, rc = _run(
         "ffmpeg", "-hide_banner",
-        "-f", "lavfi", "-i", "nullsrc=s=64x64",
-        "-t", "0.1", "-c:v", name, "-f", "null", "-",
-        timeout=15,
+        "-f", "lavfi", "-i", "testsrc=size=256x256:duration=0.1:rate=30",
+        "-vf", "format=nv12",
+        "-c:v", name, "-f", "null", "-",
+        timeout=20,
     )
     return rc == 0
 
