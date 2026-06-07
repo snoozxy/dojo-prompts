@@ -55,10 +55,15 @@ Once you have the URL and know what they want, execute all steps in sequence wit
 
 ```bash
 # Single video
-yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 -o "%(title)s.%(ext)s" "URL"
+yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 \
+  --concurrent-fragments 4 --retries 10 --fragment-retries 10 --no-playlist \
+  -o "%(title)s.%(ext)s" "URL"
 
 # Playlist or channel
-yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 -o "%(playlist_index)03d_%(title)s.%(ext)s" "URL"
+yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 \
+  --concurrent-fragments 4 --retries 10 --fragment-retries 10 \
+  --download-archive archive.txt \
+  -o "%(playlist_index)03d_%(title)s.%(ext)s" "URL"
 ```
 
 **Sanitize and rename** — Check if filenames need renaming **before any processing**. subs2cia and other tools name their outputs after the input file — if you process before renaming, outputs will have mismatched names.
