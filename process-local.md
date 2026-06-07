@@ -69,10 +69,16 @@ rename them to romanized lowercase with underscores before any processing
 
 **480p transcode** (if user chose 480p for screenshots):
 ```bash
-python3 dojo-prompts/scripts/transcode_batch.py "$VIDEO_DIR" "$VIDEO_DIR/480p" --height 480
+# First time on a new machine: check for GPU and get recommended flags
+python3 dojo-prompts/scripts/hw_probe.py
+
+# Then transcode (--encoder auto detects GPU if available)
+python3 dojo-prompts/scripts/transcode_batch.py "$VIDEO_DIR" "$VIDEO_DIR/480p" \
+  --height 480 --encoder auto
 ```
-This transcodes all videos in parallel (2 workers by default). Use the
-transcoded versions for subs2cia only — keep the originals.
+This transcodes all videos in parallel. GPU encoding (NVENC/AMF/QuickSync) is
+5–10× faster than CPU for large batches or long files. Use the transcoded
+versions for subs2cia only — keep the originals.
 
 ### 3. Search jimaku.cc for subtitles
 
