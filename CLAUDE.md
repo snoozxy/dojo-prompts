@@ -9,11 +9,11 @@ When the user asks about any of the following, read the corresponding skill file
 | User says something like... | Skill file |
 |---|---|
 | "discover content", "find something to watch", "help me find content" | `dojo-prompts/content-discovery.md` |
-| "process this video", "download and transcribe", "process content" | `dojo-prompts/process-content.md` |
-| "process local", "local video", "local file", "downloaded anime", "downloaded movie", "local content" | `dojo-prompts/process-local.md` |
+| "process this video", "download and transcribe", "process content", "YouTube video" | `dojo-prompts/process-content.md` |
+| "process local", "local video", "local file", "downloaded anime", "downloaded movie", "local content", "make an Anki deck from this anime", "study this anime", "create a deck for [show]", "make flashcards from [show]" | `dojo-prompts/process-local.md` |
 | "create subtitles", "transcribe this", "make an SRT", "generate subs" | `dojo-prompts/create-srt.md` |
 | "translate subtitles", "translate this SRT", "make English subs" | `dojo-prompts/translate-srt.md` |
-| "make an Anki deck", "subs2srs", "create flashcards" | `dojo-prompts/anki.md` |
+| "make an Anki deck" (with existing SRT/TSV already prepared), "subs2srs", "package the deck", "export apkg" | `dojo-prompts/anki.md` |
 | "style guide", "language parent", "analyze their speech" | `dojo-prompts/style-guide.md` |
 | "find my mistakes", "analyze my output", "what am I doing wrong" | `dojo-prompts/find-mistakes.md` |
 | "condensed audio", "condense this", "passive listening" | `dojo-prompts/condensed-audio.md` |
@@ -21,6 +21,86 @@ When the user asks about any of the following, read the corresponding skill file
 | "download a video", "download this" | Use yt-dlp (see below) |
 
 When a skill is triggered, read the full skill file first, then follow its workflow step by step.
+
+**Routing tip — "Anki deck from anime":** This almost always means `process-local.md` (the full pipeline). `anki.md` is only for the final packaging step when the user already has processed SRT or TSV files. If unsure, ask: *"Do you have the video downloaded locally, or do you have a URL?"*
+
+## Anki deck from downloaded anime — full pipeline
+
+This is the most common multi-step request. The pipeline is:
+
+```
+local video files
+  → [hw_probe.py]        check GPU / worker settings (once per machine)
+  → [transcode_batch.py] optional 480p transcode for smaller screenshots
+  → [jimaku_dl.py]       download JP subtitle candidates from jimaku.cc
+  → [sync_subs.py]       test all candidates in parallel, pick best sync
+  → [subs2cia srs]       export audio clips + screenshots → TSV per episode
+  → [prepend_summary.py] prepend episode summary to context column of each TSV
+  → [combine_tsv.py]     merge all episode TSVs into combined.tsv
+  → [apkg_export.py]     package into final .apkg for Anki import
+```
+
+**Don't skip the episode summary step.** It prepends a translation briefing to every card's context column, which makes LLM-assisted study much more useful. Read `anki.md` for the summary format.
+
+Key commands (fill in actual paths):
+```bash
+# 1. Hardware check (once — skip if ~/.dojo_hw_cache.json exists and is recent)
+python3 dojo-prompts/scripts/hw_probe.py --check || python3 dojo-prompts/scripts/hw_probe.py
+
+# 2. Optional 480p transcode (recommended for Anki — much smaller files)
+python3 dojo-prompts/scripts/transcode_batch.py "$VIDEO_DIR" "$VIDEO_DIR/480p" --encoder auto
+
+# 3. Search jimaku.cc for subtitles (requires $JIMAKU_API_KEY)
+python3 dojo-prompts/scripts/jimaku_dl.py search "Show Name"
+python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out subs_download/
+
+# 4. Sync subtitles (test all candidates, pick best)
+python3 dojo-prompts/scripts/sync_subs.py video_01.mkv subs_download/ \
+  -o synced_subs/show_01.srt --episode 1
+
+# 5. Run subs2cia for each episode
+PYTHONUTF8=1 subs2cia srs \
+  -i "$VIDEO_DIR/480p/show_01.mkv" synced_subs/show_01.srt \
+  -p 500 -N -d out_srs --export-header-row
+
+# 6. Generate episode summary and prepend to context column
+python3 dojo-prompts/scripts/prepend_summary.py out_srs/show_01.tsv "EPISODE_SUMMARY"
+
+# 7. Combine all TSVs
+python3 dojo-prompts/scripts/combine_tsv.py out_srs/ out_srs/combined.tsv
+
+# 8. Export .apkg
+python3 dojo-prompts/scripts/apkg_export.py \
+  out_srs/combined.tsv out_srs/ "show_name" "$VIDEO_DIR"
+```
+
+After the .apkg is created, delete the `out_srs/` directory — everything is embedded in the package.
+
+## Scripts reference
+
+All helper scripts live in `dojo-prompts/scripts/`:
+
+| Script | What it does |
+|---|---|
+| `hw_probe.py` | Detect CPU/RAM/GPU, test ffmpeg encoders, cache to `~/.dojo_hw_cache.json`. Run once per machine. |
+| `transcode_batch.py` | Parallel ffmpeg transcode with GPU auto-detection (`--encoder auto`). |
+| `jimaku_dl.py` | Search, list files, and download subtitles from jimaku.cc. |
+| `sync_subs.py` | Test subtitle candidates against a video in parallel, copy best match. |
+| `combine_tsv.py` | Merge multiple subs2cia TSVs into one (cross-platform). |
+| `prepend_summary.py` | Prepend an episode summary string to every row's context column. |
+| `apkg_export.py` | Package combined TSV + media into an Anki `.apkg` file. |
+| `transcribe.py` | Transcribe audio/video via ElevenLabs Scribe or Soniox. Resumes after crashes. |
+
+## Windows notes
+
+On Windows, `subs2cia` and `ffsubsync` are installed in the Python user Scripts directory and are **not on the Git Bash PATH**. Use the full executable path:
+
+```bash
+SUBS2CIA="C:/Users/snoozy/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0/LocalCache/local-packages/Python313/Scripts/subs2cia.exe"
+FFSUBSYNC="C:/Users/snoozy/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0/LocalCache/local-packages/Python313/Scripts/ffsubsync.exe"
+```
+
+`sync_subs.py` finds `ffsubsync.exe` automatically using this path — no manual path needed when using the script. Always prefix `subs2cia` commands with `PYTHONUTF8=1` to handle Japanese filenames and subtitles on Windows.
 
 ## Hardware profile (one-time setup)
 
