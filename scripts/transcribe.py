@@ -185,20 +185,28 @@ def main():
     ap.add_argument("--provider", required=True, choices=["elevenlabs", "soniox"])
     ap.add_argument("--language", default="ja", help="Language code (default: ja).")
     ap.add_argument("-o", "--output", help="Output stem (default: input basename).")
+    ap.add_argument("--force", action="store_true", help="Overwrite existing output JSON.")
     args = ap.parse_args()
 
     if not os.path.exists(args.audio):
         sys.exit(f"File not found: {args.audio}")
+
+    stem = args.output or os.path.splitext(os.path.basename(args.audio))[0]
+    out_path = f"{stem}.json"
+
+    if os.path.exists(out_path) and not args.force:
+        print(f"Skipping transcription — {out_path} already exists. Use --force to overwrite.")
+        sys.exit(0)
 
     if args.provider == "elevenlabs":
         data = transcribe_elevenlabs(args.audio, args.language)
     else:
         data = transcribe_soniox(args.audio, args.language)
 
-    stem = args.output or os.path.splitext(os.path.basename(args.audio))[0]
-    out_path = f"{stem}.json"
-    with open(out_path, "w", encoding="utf-8") as f:
+    tmp_path = out_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, out_path)
     print(f"Wrote {out_path} ({len(data.get('words', []))} words, provider={args.provider})")
 
 
