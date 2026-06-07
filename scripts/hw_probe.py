@@ -122,6 +122,31 @@ def _probe_gpu_wmi():
     )
     if not out:
         return None
+
+    # Win32_VideoController.AdapterRAM is a 32-bit field — it wraps to ~4 GB for
+    # cards with more VRAM. Read the 64-bit QWORD from the GPU driver registry key
+    # instead and build a name→MB lookup to override the WMI value.
+    reg_vram = {}
+    reg_out = _powershell(
+        "$keys = Get-ChildItem "
+        "'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}' "
+        "-ErrorAction SilentlyContinue | "
+        "Where-Object { ($_.Name -split '\\\\')[-1] -match '^\\d{4}$' }; "
+        "$r = @(); "
+        "foreach ($k in $keys) { "
+        "  $n = (Get-ItemProperty $k.PSPath -Name 'DriverDesc' -ErrorAction SilentlyContinue).DriverDesc; "
+        "  $m = (Get-ItemProperty $k.PSPath -Name 'HardwareInformation.qwMemorySize' "
+        "        -ErrorAction SilentlyContinue).'HardwareInformation.qwMemorySize'; "
+        "  if ($n -and $m) { $r += \"$n|$([math]::Round($m/1MB))\" } "
+        "}; $r -join \"`n\"",
+        timeout=15,
+    )
+    for line in (reg_out or "").splitlines():
+        if "|" in line:
+            n, mb = line.rsplit("|", 1)
+            if mb.strip().isdigit():
+                reg_vram[n.strip()] = int(mb.strip())
+
     try:
         data = json.loads(out)
         if isinstance(data, dict):
@@ -129,8 +154,11 @@ def _probe_gpu_wmi():
         gpus = []
         for g in data:
             name = g.get("Name", "")
-            vram = g.get("AdapterRAM")
-            vram_mb = int(vram) // 1048576 if vram else None
+            if name in reg_vram:
+                vram_mb = reg_vram[name]
+            else:
+                vram = g.get("AdapterRAM")
+                vram_mb = int(vram) // 1048576 if vram else None
             vendor = "NVIDIA" if "NVIDIA" in name or "GeForce" in name or "RTX" in name or "GTX" in name \
                 else "AMD" if "AMD" in name or "Radeon" in name \
                 else "Intel" if "Intel" in name \
