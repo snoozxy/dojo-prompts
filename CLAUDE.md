@@ -42,14 +42,14 @@ pip show requests >/dev/null 2>&1 || echo "MISSING: requests"
 ```bash
 pip show subs2cia 2>/dev/null | grep -i "home-page\|location"
 ```
-If the installed version is NOT from `github.com/mattvsjapan/subs2cia`, uninstall it and install the correct fork:
+If the installed version is NOT from `github.com/snoozxy/subs2cia`, uninstall it and install the correct fork:
 ```bash
 pip uninstall -y subs2cia
-pip install git+https://github.com/mattvsjapan/subs2cia.git
+pip install git+https://github.com/snoozxy/subs2cia.git
 ```
 If it IS the correct fork, upgrade it to ensure you have the latest features:
 ```bash
-pip install --upgrade git+https://github.com/mattvsjapan/subs2cia.git
+pip install --upgrade git+https://github.com/snoozxy/subs2cia.git
 ```
 
 If a required tool is missing, just install it and move on. No need to ask — but don't reinstall things that are already there.
@@ -65,6 +65,6 @@ If a required tool is missing, just install it and move on. No need to ask — b
   # Then rename to romanized lowercase with underscores
   # e.g. 「機械オンチに「API」を説明する動画」→ kikai_onchi_ni_api_wo_setsumei_suru_douga_01.mp4
   ```
-- **subs2cia**: Any step that uses subs2cia must use [mattvsjapan's fork](https://github.com/mattvsjapan/subs2cia). Install with: `pip install git+https://github.com/mattvsjapan/subs2cia.git`
+- **subs2cia**: Any step that uses subs2cia must use [snoozxy's fork](https://github.com/snoozxy/subs2cia). Install with: `pip install git+https://github.com/snoozxy/subs2cia.git`
 - **Transcription provider**: Any skill that transcribes audio/video (create-srt, find-mistakes, style-guide) supports two providers — **ElevenLabs Scribe v2** and **Soniox**. Ask the user which to use each time, then run `dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox>`. Both write the same canonical transcript JSON, so all downstream steps are identical. Make sure the chosen provider's key is set first — `$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`; if not, ask the user to paste it before transcribing.
 - **Primed Listening**: `dojo-prompts/primed-listening.lua` is an mpv script, not an AI skill. To install it, copy it to `~/.config/mpv/scripts/`.

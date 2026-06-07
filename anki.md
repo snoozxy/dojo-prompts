@@ -19,17 +19,17 @@ Create subs2srs Anki decks from video files using subs2cia. Generates audio clip
 
 ## CRITICAL: Required Fork of subs2cia
 
-This skill **requires** [mattvsjapan's fork of subs2cia](https://github.com/mattvsjapan/subs2cia). The original/upstream subs2cia will NOT work — it lacks the `context` column, `--export-header-row`, and BCP 47 locale tag support that this skill depends on.
+This skill **requires** [snoozxy's fork of subs2cia](https://github.com/snoozxy/subs2cia). The original/upstream subs2cia will NOT work — it lacks the `context` column, `--export-header-row`, and BCP 47 locale tag support that this skill depends on.
 
 **If a different version of subs2cia is already installed, you MUST uninstall it first:**
 ```bash
 pip3 uninstall subs2cia
-pip3 install git+https://github.com/mattvsjapan/subs2cia.git
+pip3 install git+https://github.com/snoozxy/subs2cia.git
 ```
 
 **If the correct fork is already installed, upgrade it to ensure you have the latest features:**
 ```bash
-pip3 install --upgrade git+https://github.com/mattvsjapan/subs2cia.git
+pip3 install --upgrade git+https://github.com/snoozxy/subs2cia.git
 ```
 
 Do not proceed until the correct fork is installed and up to date.
@@ -73,7 +73,7 @@ ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=langua
 
 ## Base Command
 
-**Requires [mattvsjapan's fork](https://github.com/mattvsjapan/subs2cia) — see "Required Fork" section above.**
+**Requires [snoozxy's fork](https://github.com/snoozxy/subs2cia) — see "Required Fork" section above.**
 
 ```bash
 # With JSON (preferred — MeCab sentence segmentation)

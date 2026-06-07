@@ -2,7 +2,7 @@
 
 This document explains the subtitle generation pipeline in `scripts/srt_common.py`, `scripts/srt_watch.py`, and `scripts/srt_translate.py`. It converts transcript JSON (character-level timestamps for Japanese) into SRT subtitles with natural line breaks.
 
-The same bunsetsu segmentation and Anki sentence-splitting algorithm is also built directly into [mattvsjapan's fork of subs2cia](https://github.com/mattvsjapan/subs2cia), which uses it for JSON-based SRS card generation.
+The same bunsetsu segmentation and Anki sentence-splitting algorithm is also built directly into [snoozxy's fork of subs2cia](https://github.com/snoozxy/subs2cia), which uses it for JSON-based SRS card generation.
 
 The scripts produce **two SRT variants** from the same bunsetsu data:
 - **Watch** — optimized for reading subtitles while watching video (short lines, timing-aware pairing)
@@ -104,7 +104,7 @@ When pairing, these guards must also pass:
 
 The Anki sentence-splitting algorithm is used in two places:
 - In `srt_common.py` (`bunsetsu_to_anki_cues()`) — used as the basis for the translate variant
-- Directly in [mattvsjapan's fork of subs2cia](https://github.com/mattvsjapan/subs2cia) — used for JSON-based SRS card generation (one card per sentence)
+- Directly in [snoozxy's fork of subs2cia](https://github.com/snoozxy/subs2cia) — used for JSON-based SRS card generation (one card per sentence)
 
 The algorithm takes a completely different path from the watch variant. Instead of the segment → line → cue pipeline, it builds cues directly from bunsetsu with sentence-level grouping.
 

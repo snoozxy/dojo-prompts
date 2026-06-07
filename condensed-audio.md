@@ -20,9 +20,9 @@ Run `/condensed-audio` with a video file or directory path.
 
 ## Requirements
 
-- [mattvsjapan's fork of subs2cia](https://github.com/mattvsjapan/subs2cia) — **must be this fork**, not the original. Install/upgrade with:
+- [snoozxy's fork of subs2cia](https://github.com/snoozxy/subs2cia) — **must be this fork**, not the original. Install/upgrade with:
   ```bash
-  pip install --upgrade git+https://github.com/mattvsjapan/subs2cia.git
+  pip install --upgrade git+https://github.com/snoozxy/subs2cia.git
   ```
 - ffmpeg and ffprobe on PATH
 

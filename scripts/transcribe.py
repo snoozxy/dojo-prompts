@@ -7,7 +7,7 @@ Supports two speech-to-text providers, selected with --provider:
 
 Both providers write the SAME canonical JSON shape (the ElevenLabs Scribe
 shape), so every downstream tool -- srt_watch.py, srt_translate.py,
-srt_summarize.py, and the mattvsjapan/subs2cia fork -- consumes the output
+srt_summarize.py, and the snoozxy/subs2cia fork -- consumes the output
 unchanged regardless of which provider produced it:
 
     { "language_code": "jpn",
