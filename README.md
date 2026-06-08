@@ -11,7 +11,7 @@ Workflow for locally stored video (downloaded anime, movies, dramas). Trigger wi
 1. Searches [jimaku.cc](https://jimaku.cc) for Japanese subtitles
 2. Tests all subtitle candidates in parallel with ffsubsync, picks best match
 3. Falls back to AI transcription (ElevenLabs / Soniox) if no good subtitle found
-4. Generates a subs2cia Anki deck with optional 480p transcode for screenshots
+4. Generates a content2srs Anki deck with optional 480p transcode for screenshots
 
 Requires `$JIMAKU_API_KEY` (generate at jimaku.cc/account).
 
@@ -23,7 +23,8 @@ Requires `$JIMAKU_API_KEY` (generate at jimaku.cc/account).
 | `scripts/sync_subs.py` | Test multiple subtitle candidates against a video in parallel; copy best match |
 | `scripts/transcode_batch.py` | Parallel ffmpeg transcoding with GPU encoder auto-detection (NVENC / AMF / QSV) |
 | `scripts/hw_probe.py` | Detect CPU, RAM, GPU, and available ffmpeg encoders; caches results to `~/.dojo_hw_cache.json` |
-| `scripts/combine_tsv.py` | Combine multiple subs2cia TSV files (cross-platform; replaces broken `head -q` one-liner) |
+
+Anki deck creation uses [`content2srs`](../content2srs/) — a native Rust binary. Build once with `cargo build --release`.
 
 ### yt-dlp optimizations
 
@@ -43,20 +44,20 @@ Run once per machine to detect your GPU and optimal settings:
 python3 dojo-prompts/scripts/hw_probe.py
 ```
 
-After this, `transcode_batch.py` and [snoozxy/subs2cia](https://github.com/snoozxy/subs2cia) automatically read from the cache — no env vars needed:
+After this, `transcode_batch.py` and `subs2cia` (condensed-audio) automatically read from the cache — no env vars needed:
 
 | Cache key | Used by |
 |---|---|
 | `FFMPEG_ENCODER` / `FFMPEG_HWACCEL` | `transcode_batch.py` |
-| `SUBS2CIA_HWACCEL` | Screenshot GPU decode in `srs` |
-| `SUBS2CIA_WORKERS` | Per-episode card export parallelism |
-| `SUBS2CIA_JOBS` | Multi-episode batch parallelism (`subs2cia -b -j`) |
+| `SUBS2CIA_HWACCEL` | Screenshot GPU decode in condensed-audio |
+| `SUBS2CIA_WORKERS` | Per-episode card export parallelism (condensed-audio) |
+| `SUBS2CIA_JOBS` | Multi-episode batch parallelism (condensed-audio) |
 
-Re-run `hw_probe.py` after upgrading subs2cia or changing hardware.
+`content2srs` auto-detects hardware — no hw_probe cache entry needed for Anki builds. Re-run `hw_probe.py` after changing hardware or upgrading ffmpeg.
 
-### subs2cia fork
+### subs2cia fork (condensed-audio only)
 
-Requires [snoozxy/subs2cia](https://github.com/snoozxy/subs2cia) — not the upstream fork. Install with:
+The condensed-audio skill requires [snoozxy/subs2cia](https://github.com/snoozxy/subs2cia). Anki deck creation now uses `content2srs` instead. Install subs2cia with:
 ```bash
 pip install git+https://github.com/snoozxy/subs2cia.git
 ```

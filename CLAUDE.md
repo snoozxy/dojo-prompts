@@ -34,21 +34,21 @@ local video files
   → [transcode_batch.py] optional 480p transcode for smaller screenshots
   → [jimaku_dl.py]       download JP subtitle candidates from jimaku.cc
   → [sync_subs.py]       test all candidates in parallel, pick best sync
-  → [subs2cia srs]       export audio clips + screenshots → TSV per episode
-  → [prepend_summary.py] prepend episode summary to context column of each TSV
-  → [combine_tsv.py]     merge all episode TSVs into combined.tsv
-  → [apkg_export.py]     package into final .apkg for Anki import
+  → [content2srs build]  audio clips + screenshots → combined .db bundle
+  → [content2srs summary] attach episode briefings to the bundle
+  → [content2srs export] package into final .apkg (or use --apkg on build)
 ```
 
-**Don't skip the episode summary step.** It prepends a translation briefing to every card's context column, which makes LLM-assisted study much more useful. Read `anki.md` for the summary format.
+**Don't skip the episode briefing step.** It attaches a translation briefing to every card's context field via `content2srs summary` or the `--summaries` flag, making LLM-assisted study much more useful. Read `anki.md` for the briefing format.
 
 Key commands (fill in actual paths). Set these variables first — every path derives from them:
 ```bash
 PREFIX="hunterxhunter"               # short lowercase slug for this run
 VIDEO_DIR="/d/anime/hunterxhunter"   # folder with the video files
 DOJO_DIR="C:/Users/snoozy/Desktop/dojo"
+CONTENT2SRS="$DOJO_DIR/content2srs/target/release/content2srs.exe"
 TEMP="$VIDEO_DIR/DOJO_TEMP/$PREFIX"
-mkdir -p "$TEMP/subs_download" "$TEMP/synced_subs" "$TEMP/out_srs"
+mkdir -p "$TEMP/subs_download" "$TEMP/synced_subs"
 ```
 
 ```bash
@@ -66,36 +66,27 @@ python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out "$TEMP/subs_
 python3 dojo-prompts/scripts/sync_subs.py "$VIDEO_DIR/480p/show_01.mkv" "$TEMP/subs_download/" \
   -o "$TEMP/synced_subs/${PREFIX}_ep01.srt" --episode 1
 
-# 5. Identify Japanese audio (and subtitle) stream indices — ALWAYS do this first.
+# 5. Identify Japanese audio stream index — ALWAYS do this first.
 # Many encodes put English audio at stream 0. Never assume 0 is Japanese.
 ffprobe -v error -select_streams a \
   -show_entries stream=index:stream_tags=language,title \
   -of csv=p=0 "$VIDEO_DIR/480p/show_01.mkv"
-# If using embedded subtitle tracks, also run:
-# ffprobe -v error -select_streams s \
-#   -show_entries stream=index:stream_tags=language,title \
-#   -of csv=p=0 "$VIDEO_DIR/480p/show_01.mkv"
-#
-# Then run subs2cia with the Japanese stream index (-ai is always required).
-# srs reads audio directly from the container (no FLAC demux). Use -b -j for multi-episode batches.
-# hw_probe.py caches SUBS2CIA_WORKERS, SUBS2CIA_JOBS, and SUBS2CIA_HWACCEL — no env vars needed.
-PYTHONUTF8=1 subs2cia srs -b -j 4 \
-  -i "$VIDEO_DIR/480p/show_01.mkv" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
-  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
 
-# 6. Generate episode summary and prepend to context column
-python3 dojo-prompts/scripts/prepend_summary.py "$TEMP/out_srs/show_01.tsv" "EPISODE_SUMMARY"
+# 6. Generate episode briefings JSON (read synced SRTs, write summaries.json)
+# Format: { "sources": { "show_01.mkv": "Episode 1 briefing...", ... } }
+# (see anki.md for the Episode Summary Format)
 
-# 7. Combine all TSVs
-python3 dojo-prompts/scripts/combine_tsv.py "$TEMP/out_srs/" "$TEMP/combined.tsv"
+# 7. Build deck — all episodes in one pass (produces .db bundle + .apkg)
+"$CONTENT2SRS" build -b -j 4 \
+  -i "$VIDEO_DIR/480p/"*.mkv "$TEMP/synced_subs/"*.srt \
+  --audio-index <jp_audio_index> --loudnorm -p 500 \
+  --summaries "$TEMP/summaries.json" \
+  --deck-name "$PREFIX" \
+  -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"
 
-# 8. Export .apkg
-python3 dojo-prompts/scripts/apkg_export.py \
-  "$TEMP/combined.tsv" "$TEMP/out_srs/" "$PREFIX" "$VIDEO_DIR"
-
-# 9. After verifying the deck in Anki — archive and clean up
+# 8. After verifying the deck in Anki — archive and clean up
 mkdir -p "$DOJO_DIR/archive/$PREFIX"
-cp "$TEMP/$PREFIX.apkg" "$TEMP/combined.tsv" "$DOJO_DIR/archive/$PREFIX/"
+cp "$TEMP/$PREFIX.apkg" "$DOJO_DIR/archive/$PREFIX/"
 cp "$TEMP/"*.json "$DOJO_DIR/archive/$PREFIX/" 2>/dev/null || true
 rm -rf "$VIDEO_DIR/DOJO_TEMP/$PREFIX"
 ```
@@ -110,10 +101,9 @@ All helper scripts live in `dojo-prompts/scripts/`:
 | `transcode_batch.py` | Parallel ffmpeg transcode with GPU auto-detection (`--encoder auto`). |
 | `jimaku_dl.py` | Search, list files, and download subtitles from jimaku.cc. |
 | `sync_subs.py` | Test subtitle candidates against a video in parallel, copy best match. |
-| `combine_tsv.py` | Merge multiple subs2cia TSVs into one (cross-platform). |
-| `prepend_summary.py` | Prepend an episode summary string to every row's context column. |
-| `apkg_export.py` | Package combined TSV + media into an Anki `.apkg` file. |
 | `transcribe.py` | Transcribe audio/video via ElevenLabs Scribe or Soniox. Resumes after crashes. |
+
+Anki deck creation uses the `content2srs` binary at `content2srs/target/release/content2srs.exe` — see `anki.md`.
 
 ## Windows notes
 
@@ -124,7 +114,12 @@ SUBS2CIA="C:/Users/snoozy/AppData/Local/Packages/PythonSoftwareFoundation.Python
 FFSUBSYNC="C:/Users/snoozy/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0/LocalCache/local-packages/Python313/Scripts/ffsubsync.exe"
 ```
 
-`sync_subs.py` finds `ffsubsync.exe` automatically using this path — no manual path needed when using the script. Always prefix `subs2cia` commands with `PYTHONUTF8=1` to handle Japanese filenames and subtitles on Windows.
+`content2srs` is a native Rust binary — set it once per session:
+```bash
+CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs.exe"
+```
+
+`sync_subs.py` finds `ffsubsync.exe` automatically using this path — no manual path needed when using the script. Always prefix `subs2cia` commands with `PYTHONUTF8=1` to handle Japanese filenames. `content2srs` handles Unicode natively — no prefix needed.
 
 ## Hardware profile (one-time setup)
 
@@ -144,12 +139,12 @@ After the cache exists, all tools auto-use the detected GPU encoder, hardware de
 
 | Key | Purpose |
 |---|---|
-| `SUBS2CIA_HWACCEL` | GPU decode for screenshot seeks |
-| `SUBS2CIA_WORKERS` | Per-episode card export threads |
-| `SUBS2CIA_JOBS` | Parallel episodes in batch mode (`-b -j`) |
+| `SUBS2CIA_HWACCEL` | GPU decode for condensed-audio screenshot seeks |
+| `SUBS2CIA_WORKERS` | Per-episode card export parallelism (condensed-audio only) |
+| `SUBS2CIA_JOBS` | Parallel episodes for condensed-audio batch (`-b -j`) |
 | `FFMPEG_ENCODER` / `FFMPEG_HWACCEL` | Used by `transcode_batch.py` |
 
-When `SUBS2CIA_JOBS > 1`, per-episode card workers scale down automatically (`WORKERS // JOBS`).
+`content2srs` auto-detects hardware and worker count — no hw_probe cache needed. Set `CONTENT2SRS_JOBS=N` (env var) to override parallel episode count in batch builds.
 
 ## Dependency checks
 
@@ -171,16 +166,22 @@ pip show requests >/dev/null 2>&1 || echo "MISSING: requests"
 pip show ffsubsync >/dev/null 2>&1 || echo "MISSING: ffsubsync (needed for process-local)"
 ```
 
-**Special case — subs2cia:** Even if subs2cia is installed, you must verify it's the correct fork **and that it's up to date**. Check with:
+**content2srs binary:** Check it exists:
+```bash
+test -f "C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs.exe" \
+  || echo "MISSING: content2srs — build with: cd content2srs && cargo build --release"
+```
+
+**subs2cia** (needed for condensed-audio only): Even if installed, verify it's the correct fork:
 ```bash
 pip show subs2cia 2>/dev/null | grep -i "home-page\|location"
 ```
-If the installed version is NOT from `github.com/snoozxy/subs2cia`, uninstall it and install the correct fork:
+If NOT from `github.com/snoozxy/subs2cia`, reinstall the correct fork:
 ```bash
 pip uninstall -y subs2cia
 pip install git+https://github.com/snoozxy/subs2cia.git
 ```
-If it IS the correct fork, upgrade it to ensure you have the latest features:
+If it IS the correct fork, upgrade it:
 ```bash
 pip install --upgrade git+https://github.com/snoozxy/subs2cia.git
 ```
@@ -203,7 +204,8 @@ If a required tool is missing, just install it and move on. No need to ask — b
   # Then rename to romanized lowercase with underscores
   # e.g. 「機械オンチに「API」を説明する動画」→ kikai_onchi_ni_api_wo_setsumei_suru_douga_01.mp4
   ```
-- **subs2cia**: Any step that uses subs2cia must use [snoozxy's fork](https://github.com/snoozxy/subs2cia). Install with: `pip install git+https://github.com/snoozxy/subs2cia.git`
+- **content2srs**: Anki deck creation uses the `content2srs` Rust binary in this repo. Build with: `cd content2srs && cargo build --release`. Binary lives at `content2srs/target/release/content2srs.exe`.
+- **subs2cia**: Still required for the condensed-audio skill only. Must use [snoozxy's fork](https://github.com/snoozxy/subs2cia). Install with: `pip install git+https://github.com/snoozxy/subs2cia.git`
 - **Transcription provider**: Any skill that transcribes audio/video (create-srt, find-mistakes, style-guide) supports two providers — **ElevenLabs Scribe v2** and **Soniox**. Ask the user which to use each time, then run `dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox>`. Both write the same canonical transcript JSON, so all downstream steps are identical. Make sure the chosen provider's key is set first — `$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`; if not, ask the user to paste it before transcribing.
 - **jimaku.cc subtitles**: The `process-local` skill downloads Japanese subtitles from jimaku.cc. Requires `$JIMAKU_API_KEY` (generate at jimaku.cc/account). Use `dojo-prompts/scripts/jimaku_dl.py` for all API calls — search, file listing, and download.
 - **Primed Listening**: `dojo-prompts/primed-listening.lua` is an mpv script, not an AI skill. To install it, copy it to `~/.config/mpv/scripts/`.

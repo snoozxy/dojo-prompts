@@ -1,7 +1,7 @@
 ---
 name: anki
 description: |
-  Create subs2srs Anki decks from video files using subs2cia. Generates audio
+  Create subs2srs Anki decks from video files using content2srs. Generates audio
   clips and subtitle text for flashcard-based language learning.
 allowed-tools:
   - Bash
@@ -15,31 +15,20 @@ allowed-tools:
 
 # Subs2SRS Deck Generator
 
-Create subs2srs Anki decks from video files using subs2cia. Generates audio clips and subtitle text for flashcard-based language learning.
+Create subs2srs Anki decks from video files using content2srs. Generates audio clips and subtitle text for flashcard-based language learning.
 
-## CRITICAL: Required Fork of subs2cia
+## content2srs binary
 
-This skill **requires** [snoozxy's fork of subs2cia](https://github.com/snoozxy/subs2cia). The original/upstream subs2cia will NOT work — it lacks the `context` column, `--export-header-row`, and BCP 47 locale tag support that this skill depends on.
+All Anki deck work uses `content2srs` — a native Rust binary in this repo. Set the path once:
 
-**If a different version of subs2cia is already installed, you MUST uninstall it first:**
 ```bash
-pip3 uninstall subs2cia
-pip3 install git+https://github.com/snoozxy/subs2cia.git
+CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs.exe"
 ```
 
-**If the correct fork is already installed, upgrade it to ensure you have the latest features:**
+If the binary is missing or stale, rebuild it:
 ```bash
-pip3 install --upgrade git+https://github.com/snoozxy/subs2cia.git
+cd C:/Users/snoozy/Desktop/dojo/content2srs && cargo build --release
 ```
-
-Do not proceed until the correct fork is installed and up to date.
-
-### Performance (snoozxy fork)
-
-- **`srs` reads audio directly from the source container** via `-ai` — no upfront FLAC demux.
-- **Batch multi-episode runs**: use `-b -j N` (e.g. `-j 4`). `hw_probe.py` caches `SUBS2CIA_JOBS` and `SUBS2CIA_WORKERS`.
-- **Single episode**: `-j` is optional; per-card parallelism still uses `SUBS2CIA_WORKERS` from the cache.
-- Audio clips use fast input-side seek (few ms tolerance; `-p` padding covers it).
 
 ## Usage
 
@@ -47,7 +36,7 @@ The user provides a source directory containing video files (typically .mp4 with
 
 ## Track Selection
 
-**Always run ffprobe before any subs2cia command.** Never assume stream 0 is Japanese — many encodes (dual-audio WEBRips, EMBER, etc.) put English audio first. The wrong stream produces garbage cards.
+**Always run ffprobe before any content2srs command.** Never assume stream 0 is Japanese — many encodes (dual-audio WEBRips, EMBER, etc.) put English audio first. The wrong stream produces garbage cards.
 
 ```bash
 # Check audio tracks
@@ -61,14 +50,14 @@ ffprobe -v error -select_streams s \
   -of csv=p=0 "video.mkv"
 ```
 
-Find the stream index where `language` is `jpn`, `ja`, `japanese`, or `日本語`. Use that index for `-ai` (audio) and `-si` (subtitles). If there are multiple Japanese tracks, ask the user which to use.
+Find the stream index where `language` is `jpn`, `ja`, `japanese`, or `日本語`. Use that index for `--audio-index`. If there are multiple Japanese tracks, ask the user which to use.
 
 ### Other Languages
 Adapt track selection to whatever language the user specifies. Use the same ffprobe approach — match by language code and title tags.
 
 ### Multi-language subtitle files
 
-Dual-language fansub ASS files and some jimaku downloads contain both Japanese and English lines in a single file. Passing these directly to subs2cia will mix both languages into card text. Before using an external subtitle file, check whether it's pure Japanese:
+Dual-language fansub ASS files and some jimaku downloads contain both Japanese and English lines in a single file. Passing these directly to content2srs will mix both languages into card text. Before using an external subtitle file, check whether it's pure Japanese:
 
 ```bash
 # Rough check: count CJK characters vs pure-ASCII lines
@@ -84,79 +73,86 @@ print(f'CJK lines: {cjk}, Latin-only lines: {latin}')
 " subtitle.srt
 ```
 
-If `latin-only lines` is significant (more than a handful of timing/metadata lines), the file is likely dual-language. Either:
-- Find a Japanese-only subtitle file from the jimaku download set, or
-- Strip English lines from the ASS (for ASS files, English lines typically use a style named `Default` or `English` while Japanese uses `Japanese` or `Subtitle`).
+If `latin-only lines` is significant (more than a handful of timing/metadata lines), the file is likely dual-language. Either find a Japanese-only file from the jimaku download set, or strip English lines from the ASS.
 
 ### Check Available Input Sources
 
-Before running subs2cia, check for input sources in priority order:
+Before running content2srs, check for input sources in priority order:
 
 **1. transcript JSON files (preferred)** — Check if there are transcript JSON files alongside the videos:
 ```bash
 ls "$SOURCE_DIR"/*.json 2>/dev/null
 ```
-If JSON files exist, use them as input. subs2cia will use MeCab-based sentence segmentation to produce one card per sentence — this gives better card boundaries than SRT-based splitting. JSON files must be passed explicitly alongside the video in `-i`.
+If JSON files exist, use them as input. content2srs uses UniDic-based sentence segmentation for Japanese — one card per sentence, better card boundaries than SRT splitting.
 
 **2. External SRT/ASS files (fallback)** — Check if there are subtitle files alongside the videos:
 ```bash
 ls "$SOURCE_DIR"/*.srt "$SOURCE_DIR"/*.ass 2>/dev/null
 ```
-If external subtitle files exist (e.g., from the create-srt skill), subs2cia will pick them up automatically as long as the filename matches the video (e.g., `video.mp4` + `video.srt`). In this case you don't need `-si` at all.
+In batch mode, content2srs pairs subtitle files automatically by filename stem.
 
-**3. Embedded tracks (last resort)** — Inspect the video files for embedded audio and subtitle tracks:
-```bash
-ffprobe -v error -select_streams a -show_entries stream=index:stream_tags=language,title -of csv=p=0 "$SOURCE_DIR"/*.mp4 2>/dev/null | head -5
-ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language,title -of csv=p=0 "$SOURCE_DIR"/*.mp4 2>/dev/null | head -5
-```
+**3. Embedded tracks (last resort)** — Use `--subtitle-index` with the Japanese stream index from ffprobe.
 
 ## Base Command
 
-**Requires [snoozxy's fork](https://github.com/snoozxy/subs2cia) — see "Required Fork" section above.**
-
 ```bash
-# With JSON (preferred — MeCab sentence segmentation)
-# Audio index still required — check with ffprobe first (see Track Selection above)
-subs2cia srs -i "video.mp4" "transcript.json" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs.exe"
 
-# With external SRT (fallback — subs2cia picks it up by filename match)
-# Still need -ai for correct audio; -si is not needed for external files
-# -j: parallel episodes (from hw_probe cache or SUBS2CIA_JOBS); omit for single file
-subs2cia srs -b -j 4 -i "*.mp4" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+# Single episode — external subtitle (sidecar .srt/.json matches video stem)
+"$CONTENT2SRS" build \
+  -i "video.mkv" -s "subtitle.srt" \
+  --audio-index <jp_audio_index> \
+  --loudnorm -p 500 \
+  --deck-name "<show_name>" \
+  -o deck.db --apkg deck.apkg
 
-# With embedded subtitle tracks (last resort)
-# Both -ai and -si must come from ffprobe — never hardcode 0
-subs2cia srs -b -j 4 -i "*.mp4" -ai <jp_audio_index> -si <jp_subtitle_index> -p 500 -N -d out_srs --export-header-row
+# Multi-episode batch — pass all videos and sidecar subs together; paired by stem
+"$CONTENT2SRS" build -b -j 4 \
+  -i "480p/"*.mkv "synced_subs/"*.srt \
+  --audio-index <jp_audio_index> \
+  --loudnorm -p 500 \
+  --summaries summaries.json \
+  --deck-name "<show_name>" \
+  -o deck.db --apkg deck.apkg
+
+# With embedded subtitle track (last resort)
+"$CONTENT2SRS" build \
+  -i "video.mkv" \
+  --audio-index <jp_audio_index> --subtitle-index <jp_sub_index> \
+  --loudnorm -p 500 \
+  --deck-name "<show_name>" \
+  -o deck.db --apkg deck.apkg
 ```
 
 ### Parameters Explained
 
 | Flag | Value | Purpose |
 |------|-------|---------|
-| `srs` | - | SRS subcommand (creates Anki-ready output) |
-| `-b` | - | Batch mode (process multiple files) |
-| `-j` | `4` | Parallel episodes in batch mode (from `hw_probe` cache or `SUBS2CIA_JOBS`) |
-| `-i` | `"*.mp4" "*.json"` | Input files (video + JSON or video + subtitle) |
-| `-ai` | `0` | Japanese audio stream index in the source container (always required) |
-| `-si` | `0` | Subtitle stream index (only needed with embedded tracks) |
+| `build` | - | Build subcommand — extracts audio + screenshots, writes bundle |
+| `-b` | - | Batch mode — discovers episodes from mixed video+subtitle inputs |
+| `-j` | `4` | Parallel episodes in batch mode (env: `CONTENT2SRS_JOBS`) |
+| `-i` | `*.mkv *.srt` | Input files (videos and/or sidecar subtitles) |
+| `-s` | `subtitle.srt` | External subtitle file (single-episode mode only) |
+| `--audio-index` | `0` | Japanese audio stream index (always required — check with ffprobe) |
+| `--subtitle-index` | `0` | Embedded subtitle stream index (only for embedded subs) |
 | `-p` | `500` | Padding in ms around each subtitle line |
-| `-N` | - | Normalize audio levels |
-| `-d` | `out_srs` | Output directory name |
-| `--export-header-row` | - | Include column headers in TSV output |
+| `--loudnorm` | - | Normalize audio loudness |
+| `--summaries` | `summaries.json` | Import episode briefings after build |
+| `--deck-name` | `show_name` | Deck name in the exported .apkg |
+| `-o` | `deck.db` | Output bundle path |
+| `--apkg` | `deck.apkg` | Also export .apkg immediately after build |
 
 ## Workflow
 
 1. Get the source directory from the user
 2. **Check available input sources** — look for transcript JSON files first, then external SRT/ASS, then embedded tracks (see priority order above)
-3. **Identify audio and subtitle tracks** — run ffprobe on both audio and subtitle streams (see Track Selection above). Determine the Japanese audio index (`-ai`) and, if using embedded subs, the Japanese subtitle index (`-si`). Also check any external subtitle files for dual-language content before using them.
+3. **Identify audio tracks** — run ffprobe (see Track Selection above). Determine the Japanese audio index. Also check any external subtitle files for dual-language content before using them.
 4. **Rename source video files if needed** — skip if filenames are already ASCII-safe. Only add episode numbers (`_01`, `_02`) when there are multiple videos. See `process-content.md` for full renaming rules.
-5. Navigate to the source directory
-6. Run subs2cia with JSON input (preferred) or subtitle track indices (fallback)
-7. **Generate episode summaries** - for each TSV, read subtitle text and generate a translation briefing (see Episode Summary Format below), then prepend it to every row's `context` column. Use subagents to process all TSVs in parallel.
-8. **Combine all TSV files** into a single `combined.tsv`
-9. **Export as .apkg** - package the combined TSV and all media files into an Anki .apkg deck, saved to the source directory
-10. **Clean up** - delete the `out_srs/` directory and all intermediate files, leaving only the .apkg. If an `.anki.srt` was generated from a transcript JSON file, delete it too — the SRT is an intermediate artifact, not a final output. **Do NOT delete the transcript JSON file** — it may be needed by other workflows.
-11. Report the output location to the user
+5. **Generate episode summaries** — for each episode, read the subtitle text and write a translation briefing (see Episode Summary Format below). Collect all briefings into `summaries.json`.
+6. **Run content2srs** — single-file or batch mode depending on input count. Use `--summaries` to attach briefings in the same build step.
+7. **Export .apkg** — use `--apkg` on the build command (step 6) or run `content2srs export` separately if summaries were added after the initial build.
+8. **Clean up** — delete the `deck.db` bundle and any intermediate files, leaving only the `.apkg`. **Do NOT delete transcript JSON files** — they may be needed by other workflows.
+9. Report the output location to the user
 
 ## File Naming Convention
 
@@ -164,13 +160,6 @@ Rename source video files to this format before processing:
 ```
 <show_name>_<episode>.mp4
 ```
-
-This ensures output files automatically follow the naming convention:
-- `<show_name>_<episode>_<start>-<end>.mp3`
-
-Examples:
-- `kiseijuu_01.mp4` → `kiseijuu_01_585-3377.mp3`
-- `oshi_no_ko_s2_13.mp4` → `oshi_no_ko_s2_13_4797-8508.mp3`
 
 Rules for `<show_name>`:
 - All lowercase
@@ -182,6 +171,8 @@ Rules for `<show_name>`:
 ```bash
 # 1. Store the source folder
 SOURCE_DIR="/path/to/source"
+CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs.exe"
+SHOW_NAME="<show_name>"
 
 # 2. Check for JSON files first, then SRT/ASS, then embedded tracks
 ls "$SOURCE_DIR"/*.json 2>/dev/null
@@ -190,56 +181,57 @@ ls "$SOURCE_DIR"/*.srt "$SOURCE_DIR"/*.ass 2>/dev/null
 # Always inspect audio streams — never assume stream 0 is Japanese
 ffprobe -v error -select_streams a \
   -show_entries stream=index:stream_tags=language,title \
-  -of csv=p=0 "$SOURCE_DIR"/*.mp4 2>/dev/null
+  -of csv=p=0 "$SOURCE_DIR"/*.mkv 2>/dev/null | head -5
 
 # If using embedded subtitle tracks, inspect those too
 ffprobe -v error -select_streams s \
   -show_entries stream=index:stream_tags=language,title \
-  -of csv=p=0 "$SOURCE_DIR"/*.mp4 2>/dev/null
-
-# Set these based on ffprobe output before running subs2cia
-JP_AUDIO_INDEX=<index_of_jpn_audio_stream>
-JP_SUB_INDEX=<index_of_jpn_subtitle_stream>   # only if using embedded subs
+  -of csv=p=0 "$SOURCE_DIR"/*.mkv 2>/dev/null | head -5
 
 # 3. Rename source video files to standard format
-# Ask user for the show name (e.g., "kiseijuu", "oshi_no_ko_s2")
-SHOW_NAME="<show_name>"
 cd "$SOURCE_DIR"
 for f in *.mp4; do
-  # Extract episode number (handles formats like "E01", "- 01", " 01.")
   num=$(echo "$f" | sed -E 's/.*[E -]([0-9]{2})[.\-].*/\1/')
   mv "$f" "${SHOW_NAME}_${num}.mp4"
 done
 
-# 4. Run subs2cia — prefer JSON, fall back to SRT
-# With JSON (preferred) — -ai is still required:
-PYTHONUTF8=1 subs2cia srs -i "video.mp4" "transcript.json" -ai $JP_AUDIO_INDEX -p 500 -N -d out_srs --export-header-row
-# With external SRT (fallback) — -si not needed, external file is picked up by name:
-PYTHONUTF8=1 subs2cia srs -b -j 4 -i "*.mp4" -ai $JP_AUDIO_INDEX -p 500 -N -d out_srs --export-header-row
-# With embedded subs (last resort) — both indices required:
-PYTHONUTF8=1 subs2cia srs -b -j 4 -i "*.mp4" -ai $JP_AUDIO_INDEX -si $JP_SUB_INDEX -p 500 -N -d out_srs --export-header-row
+# 4. Generate episode summaries JSON (one briefing per episode)
+#    Read subtitle text and write summaries.json — format:
+#    { "sources": { "ep01.mkv": "Episode 1 briefing...", "ep02.mkv": "..." } }
+#    (see Episode Summary Format below)
 
-# 5. Generate episode summaries and prepend to context column
-#    Launch subagents in parallel (one per TSV) to:
-#    a) Read subtitle text from the 'text' column
-#    b) Generate a translation briefing (see Episode Summary Format below)
-#    c) Prepend "Episode summary: <briefing> | " to every row's context column
-#    Use this Python snippet to apply the summary to a single TSV:
+# 5. Run content2srs — batch mode for multiple episodes
+JP_AUDIO_INDEX=<index_of_jpn_audio_stream>
 
-# EPISODE_SUMMARY should be set per-file after reading and summarizing the text
-python3 dojo-prompts/scripts/prepend_summary.py out_srs/<filename>.tsv "EPISODE_SUMMARY_HERE"
+"$CONTENT2SRS" build -b -j 4 \
+  -i "$SOURCE_DIR/"*.mkv "$SOURCE_DIR/"*.srt \
+  --audio-index $JP_AUDIO_INDEX \
+  --loudnorm -p 500 \
+  --summaries "$SOURCE_DIR/summaries.json" \
+  --deck-name "$SHOW_NAME" \
+  -o "$SOURCE_DIR/${SHOW_NAME}.db" \
+  --apkg "$SOURCE_DIR/${SHOW_NAME}.apkg"
 
-# 6. Combine all TSV files into a single file
-python3 dojo-prompts/scripts/combine_tsv.py out_srs/ out_srs/combined.tsv
+# Single episode alternative:
+"$CONTENT2SRS" build \
+  -i "$SOURCE_DIR/${SHOW_NAME}_01.mkv" -s "$SOURCE_DIR/${SHOW_NAME}_01.srt" \
+  --audio-index $JP_AUDIO_INDEX \
+  --loudnorm -p 500 \
+  --deck-name "$SHOW_NAME" \
+  -o "$SOURCE_DIR/${SHOW_NAME}.db" \
+  --apkg "$SOURCE_DIR/${SHOW_NAME}.apkg"
+# Then attach briefing and re-export:
+"$CONTENT2SRS" summary set -i "$SOURCE_DIR/${SHOW_NAME}.db" \
+  -s "${SHOW_NAME}_01.mkv" "Episode briefing here..."
+"$CONTENT2SRS" export \
+  -i "$SOURCE_DIR/${SHOW_NAME}.db" \
+  -o "$SOURCE_DIR/${SHOW_NAME}.apkg" \
+  --deck-name "$SHOW_NAME"
 
-# 7. Export as .apkg
-#    Output goes to $SOURCE_DIR/<show_name>.apkg
-python3 dojo-prompts/scripts/apkg_export.py out_srs/combined.tsv out_srs/ "${SHOW_NAME}" "$SOURCE_DIR"
+# 6. Clean up bundle (apkg has everything needed for Anki)
+rm "$SOURCE_DIR/${SHOW_NAME}.db" "$SOURCE_DIR/summaries.json"
 
-# 8. Clean up intermediate files
-rm -rf out_srs/
-
-# 9. Report location of output
+# 7. Report location of output
 ls -la "$SOURCE_DIR/${SHOW_NAME}.apkg"
 ```
 
@@ -256,11 +248,6 @@ This is a line from [show name] ([name in target language]), a [format descripti
 This is a line from ゆる言語学ラジオ (Yuru Linguistics Radio), a conversational Japanese podcast hosted by 水野太貴 (Mizuno Taiki) and 堀元見 (Horimoto Ken). They discuss linguistic misconceptions (言語学の誤解), covering topics like prescriptivism (規範主義), etymology (語源), and phonological change (音韻変化). Key terms: 言語学 (linguistics), 方言 (dialect), 音韻 (phonology). The tone is casual and humorous, with academic terminology throughout.
 ```
 
-**Example (Chinese):**
-```
-This is a line from 博音 (Bo Yin Podcast), a conversational Mandarin Chinese podcast hosted by 博恩 (Brian Tseng). The guest is 何立安博士, a sports science PhD specializing in strength training and physical conditioning. They discuss why people plateau in weight training (重訓卡關), covering topics like training discipline (紀律), progressive overload (漸進式超負荷), and the science behind muscle adaptation. Key terms: 重訓 (weight training), 卡關 (hitting a plateau), 肌肥大 (muscle hypertrophy). The tone is casual and colloquial, with technical fitness terminology throughout.
-```
-
 **What to include:**
 - Show name and format (podcast, drama, etc.) in both English and the target language
 - Host and guest names in both the target language script and romanization
@@ -269,38 +256,55 @@ This is a line from 博音 (Bo Yin Podcast), a conversational Mandarin Chinese p
 - Domain-specific terminology (target language term + English translation)
 - Language register and conversational tone
 
-## APKG Export
+### summaries.json format
 
-After combining TSVs, package everything into an Anki .apkg file using the `apkg_export.py` script:
-
-```bash
-python3 dojo-prompts/scripts/apkg_export.py out_srs/combined.tsv out_srs/ "${SHOW_NAME}" "$SOURCE_DIR"
+```json
+{
+  "deck_summary": "Optional deck-wide fallback if an episode has no entry.",
+  "sources": {
+    "show_ep01.mkv": "Episode 1 briefing text...",
+    "show_ep02.mkv": "Episode 2 briefing text..."
+  }
+}
 ```
 
+Keys in `sources` must match the video filename as it appears in the bundle. Use `content2srs summary list -i deck.db` to see the exact source names registered during build.
+
+## APKG Export
+
+The `.apkg` is produced either by `--apkg` on the build command (all in one step) or separately:
+
+```bash
+"$CONTENT2SRS" export \
+  -i "${SHOW_NAME}.db" \
+  -o "${SHOW_NAME}.apkg" \
+  --deck-name "$SHOW_NAME"
+```
+
+### Card Fields
+
+content2srs produces cards with these fields: `Expression / Audio / Image / Context / Timestamps / Source`
+
+- `Expression` — subtitle text for the card
+- `Audio` — `[sound:filename.mp3]`
+- `Image` — screenshot filename
+- `Context` — surrounding subtitle lines, optionally prefixed with `Episode summary: <briefing> | `
+- `Timestamps` — `start_ms-end_ms`
+- `Source` — video filename
+
 ### APKG Notes
-- The model uses a **listening card** template: front = audio only, back = text + context
-- Deck and model IDs are derived from the show name so re-importing updates existing cards rather than creating duplicates
-- The `genanki` package must be installed (`pip3 install genanki`)
-- Screenshots are exported by default by subs2cia (disable with `--no-export-screenshot`)
-- The TSV column names (`audioclip`, `screenclip`, `text`, `context`) come from subs2cia's `--export-header-row` output. The `audioclip` column contains `[sound:filename.mp3]` format and `screenclip` contains `<img src='filename.jpg'>` format — both need parsing to extract the bare filename.
+- The `.db` bundle contains all media blobs — the `.apkg` is derived from it. Once the `.apkg` is verified in Anki, the `.db` can be deleted.
+- Deck and note type names derive from `--deck-name`; re-importing the same deck name updates existing cards rather than creating duplicates.
+- `genanki` is **not** required — content2srs writes the Anki collection format natively.
 
 ## Output
 
-The final output is a single file in the source directory:
-- **`<show_name>.apkg`** - complete Anki deck with all audio and screenshot files embedded, ready for direct import into Anki
-
-All intermediate files (TSVs, audio clips, screenshots, the `out_srs/` directory) are deleted after the .apkg is created.
-
-## Adjustments
-
-- **Different video format**: Change `*.mp4` to `*.mp4` or other format
-- **Different track indices**: Adjust `-ai` and `-si` based on ffprobe output
-- **More/less padding**: Adjust `-p` value (default 500ms)
+The final output is a single file:
+- **`<show_name>.apkg`** — complete Anki deck with all audio and screenshot files embedded, ready for direct import into Anki
 
 ## Notes
 
-- subs2cia requires text-based subtitles (SRT, ASS). Won't work with bitmap subtitles (PGS).
-- subs2cia picks up external subtitle files automatically if the filename matches the video (e.g., `video.mp4` + `video.srt`).
-- If subtitles are embedded, subs2cia extracts them automatically.
-- The .apkg is written directly to the source directory; all intermediate files are cleaned up automatically.
-- **Do not proactively check on background jobs.** When a long-running batch process is running in the background, do not poll for progress or read output files unless the user asks. This avoids wasting context window on progress bar output.
+- content2srs requires text-based subtitles (SRT, ASS, or JSON). Won't work with bitmap subtitles (PGS) — use AI transcription as fallback.
+- In batch mode, sidecar subtitle files are paired with videos by matching filename stems. Stems must match (e.g., `ep01.mkv` + `ep01.srt`).
+- `--resume` is on by default — interrupted builds can be continued by re-running the same command.
+- **Do not proactively check on background jobs.** When a long-running batch process is running, do not poll for progress unless the user asks.

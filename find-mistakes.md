@@ -105,7 +105,7 @@ If yes, generate an `.apkg` file with one card per correction:
 - **Front**: The corrected/natural version only. Never put the user's mistake on any side of the card — the goal is to burn the correct version into memory, not reinforce the mistake.
 - **Back**: Empty.
 
-Use the `apkg_export.py` script and `genanki` to create the deck. Follow the Anki deck creation process from the `anki.md` skill for packaging.
+Use `genanki` directly to create the deck. There is no video/audio involved, so content2srs doesn't apply here — construct the deck programmatically with one note per correction.
 
 ## Tips
 

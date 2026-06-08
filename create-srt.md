@@ -56,6 +56,7 @@ python3 dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox> --lang
 This produces `<video_stem>.json` (e.g., `kikai_onchi_01.mp4` → `kikai_onchi_01.json`) so all outputs share a consistent basename.
 
 Notes:
+- **Video inputs** are demuxed to a cached `<stem>.transcribe.mka` sidecar before upload (`-c:a copy`, no re-encode). Uploading audio-only is typically 10–20× smaller than a full MKV, which saves the most wall-clock time on transcription. Use `--no-extract-audio` to upload the source file as-is. For dual-audio encodes, Japanese is auto-selected; override with `--audio-index N`.
 - **ElevenLabs** is a single synchronous request. Files up to 3GB; longer videos can take a few minutes.
 - **Soniox** runs an async job (upload → transcribe → poll). The helper handles polling and deletes the uploaded file from your account when done.
 - Do not request `additional_formats` — we build the SRT ourselves from the raw word data.

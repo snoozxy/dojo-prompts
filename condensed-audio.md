@@ -1,8 +1,9 @@
 ---
 name: condensed-audio
 description: |
-  Generate condensed audio from video files using subs2cia. Extracts only
-  the spoken dialogue as an MP3 for passive listening practice.
+  Generate condensed audio from video files using subs2cia condense. Extracts
+  only the spoken dialogue as an MP3 for passive listening practice. Note:
+  Anki deck creation uses content2srs instead — subs2cia is only needed here.
 allowed-tools:
   - Bash
   - Read

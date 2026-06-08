@@ -22,6 +22,9 @@ unchanged regardless of which provider produced it:
 Usage:
     python3 scripts/transcribe.py --provider soniox -o my_video --language ja my_video.mp4
 
+Video inputs are demuxed to a cached sidecar audio file before upload (much smaller
+than uploading the full MKV/MP4). Use --no-extract-audio to upload the file as-is.
+
 The API key is read from the environment:
     ELEVENLABS_API_KEY   for --provider elevenlabs
     SONIOX_API_KEY       for --provider soniox
@@ -30,6 +33,8 @@ import argparse
 import json
 import math
 import os
+import shutil
+import subprocess
 import sys
 import time
 
@@ -39,6 +44,89 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import requests
+
+_VIDEO_EXTENSIONS = {
+    ".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".ts", ".mpeg", ".mpg", ".wmv", ".flv",
+}
+
+
+# ── audio extract (upload only the audio stream) ─────────────────────────────
+
+def _is_video(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in _VIDEO_EXTENSIONS
+
+
+def _detect_jp_audio_index(video: str):
+    """Return 0-based audio-stream index for Japanese, or None to use stream 0."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ffprobe, "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=index:stream_tags=language",
+                "-of", "json",
+                video,
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        streams = json.loads(result.stdout).get("streams", [])
+        ja_langs = {"jpn", "ja", "japanese"}
+        for i, s in enumerate(streams):
+            lang = s.get("tags", {}).get("language", "").lower()
+            if lang in ja_langs:
+                return i
+    except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def _audio_map_selector(video: str, audio_index):
+    if audio_index is not None:
+        return f"0:a:{audio_index}"
+    jp = _detect_jp_audio_index(video)
+    if jp is not None:
+        return f"0:a:{jp}"
+    return "0:a:0"
+
+
+def _prepare_upload_path(video_path: str, audio_index, extract_audio: bool) -> str:
+    """Return the file path to upload. Video inputs demux to a cached .mka sidecar."""
+    if not extract_audio or not _is_video(video_path):
+        return video_path
+
+    sidecar = os.path.splitext(video_path)[0] + ".transcribe.mka"
+    if os.path.isfile(sidecar) and os.path.getmtime(sidecar) >= os.path.getmtime(video_path):
+        size_mb = os.path.getsize(sidecar) / 1_048_576
+        print(f"Using cached audio extract {sidecar} ({size_mb:.0f} MB)")
+        return sidecar
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        sys.exit("ffmpeg not found; install ffmpeg or pass --no-extract-audio")
+
+    selector = _audio_map_selector(video_path, audio_index)
+    video_mb = os.path.getsize(video_path) / 1_048_576
+    print(f"Extracting {selector} from {os.path.basename(video_path)} ({video_mb:.0f} MB) for upload...")
+    tmp = sidecar + ".tmp"
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", video_path,
+        "-map", selector,
+        "-vn",
+        "-c:a", "copy",
+        tmp,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if result.returncode != 0:
+        tail = (result.stderr or "")[-500:]
+        sys.exit(f"ffmpeg audio extract failed: {tail}")
+    os.replace(tmp, sidecar)
+    size_mb = os.path.getsize(sidecar) / 1_048_576
+    print(f"Wrote {sidecar} ({size_mb:.0f} MB, {video_mb / max(size_mb, 0.1):.1f}x smaller than source)")
+    return sidecar
 
 
 # ── ElevenLabs Scribe ─────────────────────────────────────────────────────────
@@ -231,10 +319,24 @@ def main():
     ap.add_argument("--language", default="ja", help="Language code (default: ja).")
     ap.add_argument("-o", "--output", help="Output stem (default: input basename).")
     ap.add_argument("--force", action="store_true", help="Overwrite existing output JSON.")
+    ap.add_argument(
+        "--extract-audio",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Demux audio from video before upload (default: on; much faster uploads)",
+    )
+    ap.add_argument(
+        "--audio-index",
+        type=int,
+        default=None,
+        help="0-based audio stream index for video inputs (default: auto-detect Japanese)",
+    )
     args = ap.parse_args()
 
     if not os.path.exists(args.audio):
         sys.exit(f"File not found: {args.audio}")
+
+    upload_path = _prepare_upload_path(args.audio, args.audio_index, args.extract_audio)
 
     stem = args.output or os.path.splitext(os.path.basename(args.audio))[0]
     out_path = f"{stem}.json"
@@ -244,10 +346,10 @@ def main():
         sys.exit(0)
 
     if args.provider == "elevenlabs":
-        data = transcribe_elevenlabs(args.audio, args.language)
+        data = transcribe_elevenlabs(upload_path, args.language)
     else:
         state_path = f"{stem}.transcription_state.json"
-        data = transcribe_soniox(args.audio, args.language, state_path)
+        data = transcribe_soniox(upload_path, args.language, state_path)
 
     tmp_path = out_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:

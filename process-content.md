@@ -106,4 +106,4 @@ Tell the user what was generated and where the output files are.
 
 ## Notes
 
-- **Audio stream language tags are unreliable.** yt-dlp sometimes tags Japanese audio as "English" because YouTube's metadata is wrong. When using subs2cia with `-tl ja`, this can cause it to skip the correct audio stream. For YouTube downloads, use `-ai 0` to explicitly select the first (usually only) audio stream rather than relying on language matching.
+- **Audio stream language tags are unreliable.** yt-dlp sometimes tags Japanese audio as "English" because YouTube's metadata is wrong. For YouTube downloads, use `--audio-index 0` (content2srs) or `-ai 0` (subs2cia condense) to explicitly select the first (usually only) audio stream rather than relying on language tag matching.

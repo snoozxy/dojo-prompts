@@ -12,40 +12,18 @@ Options:
     --height N        Target height in pixels (default: 480). Width is auto (-2).
     --crf N           CRF/quality value (default: 23)
     --preset PRESET   Encoder preset (default: fast). Meaning varies by encoder.
+    --profile NAME    Quality/speed preset: default | proxy (480p screenshot proxies)
     --encoder NAME    Video encoder: auto|libx264|h264_nvenc|h264_amf|h264_qsv
-                      auto detects the best available GPU encoder, falls back to
-                      libx264. Reads FFMPEG_ENCODER env var as default.
-    --hw-decode       Enable hardware-accelerated decode (faster seeking in large
-                      files). Reads FFMPEG_HWACCEL env var; set to cuda, d3d11va,
-                      or qsv. Omit or set to 'none' for software decode.
-    --ext EXT         Output container format (default: mkv)
-    --suffix SUFFIX   Suffix appended before extension, e.g. _480p (default: none)
-    --glob PATTERN    Filename glob to match inputs (default: *.mkv *.mp4 *.avi).
-                      Repeat to add multiple patterns.
-    --workers N       Parallel ffmpeg processes. Default: 2 for CPU encoders,
-                      4 for GPU encoders (GPU offloads the encode bottleneck).
+    --hw-decode       Enable hardware-accelerated decode (cuda|d3d11va|qsv|auto)
+    --copy-if-small   Remux when source height <= target (default: on)
+    --no-copy-if-small
+    --workers N       Parallel ffmpeg processes (default: from ~/.dojo_hw_cache.json)
     --overwrite       Re-encode files that already exist in output_dir
 
 Examples:
-    # Auto-detect best encoder (GPU if available)
     python3 transcode_batch.py "D:/anime/show" "D:/anime/show/480p" --encoder auto
-
-    # Force NVENC with hardware decode
-    python3 transcode_batch.py src/ out/ --encoder h264_nvenc --hw-decode
-
-    # 720p software transcode
-    python3 transcode_batch.py src/ out/ --height 720 --suffix _720p
-
-    # Run hw_probe.py first to find your optimal flags:
-    python3 scripts/hw_probe.py
-
-Notes:
-    - Audio is copied as-is (-c:a copy). All audio tracks are preserved
-      (-map 0:a) so dual-audio encodes keep both English and Japanese.
-    - GPU encoders (nvenc/amf/qsv) are significantly faster than libx264 for
-      large batches or 10hr+ content, with minimal quality difference at CRF 23.
-    - Set FFMPEG_ENCODER and FFMPEG_HWACCEL in your shell profile to avoid
-      passing flags every time. hw_probe.py tells you the right values.
+    python3 transcode_batch.py src/ out/ --profile proxy --encoder auto
+    python3 scripts/hw_probe.py   # run once; sets transcode_workers + encoder in cache
 """
 
 import argparse
@@ -57,6 +35,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -64,11 +43,11 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 _HW_CACHE_PATH = Path.home() / ".dojo_hw_cache.json"
-
-# ── encoder detection ────────────────────────────────────────────────────────
-
 _GPU_ENCODERS = ["h264_nvenc", "h264_amf", "h264_qsv"]
+_NVENC_MAX_WORKERS = 3  # consumer GPUs typically cap concurrent NVENC sessions
 
+
+# ── hw cache / probes ───────────────────────────────────────────────────────
 
 def _load_hw_cache():
     """Return recommendations dict from ~/.dojo_hw_cache.json, or {}."""
@@ -79,28 +58,52 @@ def _load_hw_cache():
         return {}
 
 
-def _test_encoder(name):
+def _logical_cores():
+    return os.cpu_count() or 4
+
+
+def _test_encoder(ffmpeg_exe, name):
+    """Match hw_probe.py: 256x256 testsrc + nv12 (AMF rejects tiny nullsrc)."""
     r = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-f", "lavfi", "-i", "nullsrc=s=64x64",
-         "-t", "0.1", "-c:v", name, "-f", "null", "-"],
-        capture_output=True, timeout=15,
+        [
+            ffmpeg_exe, "-hide_banner",
+            "-f", "lavfi", "-i", "testsrc=size=256x256:duration=0.1:rate=30",
+            "-vf", "format=nv12",
+            "-c:v", name, "-f", "null", "-",
+        ],
+        capture_output=True,
+        timeout=20,
     )
     return r.returncode == 0
 
 
-def _resolve_encoder(requested):
+def _test_scale_cuda(ffmpeg_exe):
+    r = subprocess.run(
+        [
+            ffmpeg_exe, "-hide_banner",
+            "-f", "lavfi", "-i", "testsrc=size=256x256:duration=0.1:rate=30",
+            "-vf", "scale_cuda=128:128,format=nv12",
+            "-f", "null", "-",
+        ],
+        capture_output=True,
+        timeout=20,
+    )
+    return r.returncode == 0
+
+
+def _resolve_encoder(ffmpeg_exe, requested):
     """Return the encoder name to use. 'auto' checks cache then live-tests."""
     if requested and requested != "auto":
         return requested
-    # Check cache first — avoids ~10s of encoder tests on every run
     cached = _load_hw_cache().get("FFMPEG_ENCODER")
     if cached and cached != "libx264":
-        sys.stderr.write(f"Using cached encoder: {cached} (run hw_probe.py --force to refresh)\n")
+        sys.stderr.write(
+            f"Using cached encoder: {cached} (run hw_probe.py --force to refresh)\n"
+        )
         return cached
-    # Cache miss or CPU-only — live test
     for enc in _GPU_ENCODERS:
         try:
-            if _test_encoder(enc):
+            if _test_encoder(ffmpeg_exe, enc):
                 return enc
         except Exception:
             pass
@@ -111,74 +114,210 @@ def _is_gpu_encoder(name):
     return name in _GPU_ENCODERS
 
 
+def _resolve_workers(encoder, explicit):
+    """CLI > hw_cache transcode_workers > heuristic. Cap NVENC concurrency."""
+    cache = _load_hw_cache()
+    if explicit is not None:
+        workers = explicit
+    else:
+        cached = cache.get("transcode_workers")
+        try:
+            workers = int(cached) if cached is not None else None
+        except (TypeError, ValueError):
+            workers = None
+        if workers is None:
+            cores = _logical_cores()
+            if _is_gpu_encoder(encoder):
+                workers = min(4, cores)
+            else:
+                workers = max(1, cores // 4)
+    if encoder == "h264_nvenc":
+        workers = min(workers, _NVENC_MAX_WORKERS)
+    return max(1, workers)
+
+
+def _probe_video_height(ffprobe_exe, path):
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_exe, "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=height",
+                "-of", "csv=p=0",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip())
+    except (ValueError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
 # ── encoder-specific ffmpeg args ─────────────────────────────────────────────
 
-def _encode_args(encoder, height, crf, preset):
-    """Return the ffmpeg args for video encoding with the given encoder."""
-    vf = f"scale=-2:{height}"
+def _encode_args(
+    encoder,
+    height,
+    crf,
+    preset,
+    hwaccel,
+    scale_cuda_ok,
+    nvenc_preset,
+    x264_threads,
+):
+    """Return ffmpeg args for video encoding."""
+    use_cuda_scale = (
+        scale_cuda_ok
+        and hwaccel == "cuda"
+        and encoder in ("h264_nvenc", "hevc_nvenc")
+    )
+    if use_cuda_scale:
+        vf = f"scale_cuda=-2:{height},format=nv12"
+    elif encoder == "h264_amf":
+        vf = f"scale=-2:{height},format=yuv420p"
+    else:
+        vf = f"scale=-2:{height}"
 
     if encoder == "h264_nvenc":
-        # VBR constant-quality mode — closest equivalent to CRF in nvenc
-        return ["-vf", vf, "-c:v", "h264_nvenc", "-preset", "p4",
-                "-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0"]
+        return [
+            "-vf", vf,
+            "-c:v", "h264_nvenc", "-preset", nvenc_preset,
+            "-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0",
+        ]
 
     if encoder == "hevc_nvenc":
-        return ["-vf", vf, "-c:v", "hevc_nvenc", "-preset", "p4",
-                "-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0"]
+        return [
+            "-vf", vf,
+            "-c:v", "hevc_nvenc", "-preset", nvenc_preset,
+            "-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0",
+        ]
 
     if encoder == "h264_amf":
-        # CQP mode. format=yuv420p required: AMF only accepts 8-bit input, and
-        # HEVC sources (common for anime) decode to yuv420p10le without it.
-        vf_amf = f"scale=-2:{height},format=yuv420p"
-        return ["-vf", vf_amf, "-c:v", "h264_amf", "-quality", "speed",
-                "-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]
+        return [
+            "-vf", vf,
+            "-c:v", "h264_amf", "-quality", "speed",
+            "-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf),
+        ]
 
     if encoder == "h264_qsv":
-        return ["-vf", vf, "-c:v", "h264_qsv", "-global_quality", str(crf),
-                "-preset", preset]
+        return [
+            "-vf", vf,
+            "-c:v", "h264_qsv", "-global_quality", str(crf),
+            "-preset", preset,
+        ]
 
-    # libx264 (default)
-    return ["-vf", vf, "-c:v", "libx264", "-crf", str(crf), "-preset", preset]
+    thread_args = ["-threads", str(x264_threads)] if x264_threads > 0 else []
+    return [
+        "-vf", vf,
+        *thread_args,
+        "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
+    ]
 
 
-# ── transcode ────────────────────────────────────────────────────────────────
+# ── ffmpeg execution ─────────────────────────────────────────────────────────
 
-def _transcode(ffmpeg_exe, src, dst, encoder, height, crf, preset, hwaccel, overwrite):
+def _run_ffmpeg(cmd, timeout=7200):
+    """Run ffmpeg without buffering unbounded stderr in memory."""
+    stderr_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".ffmpeg.log", delete=False, encoding="utf-8"
+        ) as f:
+            stderr_path = f.name
+        with open(stderr_path, "w", encoding="utf-8", errors="replace") as err_file:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=err_file,
+                timeout=timeout,
+            )
+        if result.returncode == 0:
+            return 0, None
+        with open(stderr_path, encoding="utf-8", errors="replace") as f:
+            return result.returncode, f.read()[-800:]
+    except subprocess.TimeoutExpired:
+        return -1, "timeout after 2 hours"
+    except Exception as e:
+        return -1, str(e)
+    finally:
+        if stderr_path and os.path.isfile(stderr_path):
+            try:
+                os.unlink(stderr_path)
+            except OSError:
+                pass
+
+
+def _remux_copy(ffmpeg_exe, src, dst, overwrite):
+    cmd = [
+        ffmpeg_exe,
+        "-hide_banner", "-loglevel", "error",
+        "-y" if overwrite else "-n",
+        "-i", src,
+        "-map", "0:v:0", "-map", "0:a",
+        "-c:v", "copy", "-c:a", "copy",
+        dst,
+    ]
+    return _run_ffmpeg(cmd)
+
+
+def _transcode(
+    ffmpeg_exe,
+    ffprobe_exe,
+    src,
+    dst,
+    encoder,
+    height,
+    crf,
+    preset,
+    hwaccel,
+    scale_cuda_ok,
+    nvenc_preset,
+    x264_threads,
+    copy_if_small,
+    overwrite,
+):
     if os.path.isfile(dst) and not overwrite:
         return (src, dst, "skipped", None)
 
+    if copy_if_small and ffprobe_exe:
+        source_h = _probe_video_height(ffprobe_exe, src)
+        if source_h is not None and source_h <= height:
+            code, err = _remux_copy(ffmpeg_exe, src, dst, overwrite)
+            if code == 0:
+                return (src, dst, "copied", None)
+            return (src, dst, "error", err)
+
     hw_args = []
     if hwaccel and hwaccel.lower() not in ("", "none", "off"):
-        # AMF + hw decode always fails: the scale+format filter can't consume
-        # d3d11va/dxva2 frames. Software decode is fast enough for AMF anyway.
-        if encoder == "h264_amf":
-            pass
-        else:
+        # AMF + hw decode fails with scale+format filters — software decode is fine.
+        if encoder != "h264_amf":
             hw_args = ["-hwaccel", hwaccel]
-            # For CUDA, keep decoded frames in GPU memory for the scale filter
             if hwaccel == "cuda" and _is_gpu_encoder(encoder):
                 hw_args += ["-hwaccel_output_format", "cuda"]
 
-    enc_args = _encode_args(encoder, height, crf, preset)
+    enc_args = _encode_args(
+        encoder, height, crf, preset, hwaccel, scale_cuda_ok,
+        nvenc_preset, x264_threads,
+    )
 
     cmd = (
-        [ffmpeg_exe, "-y" if overwrite else "-n"]
+        [ffmpeg_exe, "-hide_banner", "-loglevel", "error"]
+        + (["-y"] if overwrite else ["-n"])
         + hw_args
         + ["-i", src]
-        + ["-map", "0:v:0", "-map", "0:a"]  # keep ALL audio tracks
+        + ["-map", "0:v:0", "-map", "0:a"]
         + enc_args
         + ["-c:a", "copy", dst]
     )
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
-        if result.returncode == 0:
-            return (src, dst, "ok", None)
-        return (src, dst, "error", result.stderr[-800:])
-    except subprocess.TimeoutExpired:
-        return (src, dst, "error", "timeout after 2 hours")
-    except Exception as e:
-        return (src, dst, "error", str(e))
+    code, err = _run_ffmpeg(cmd)
+    if code == 0:
+        return (src, dst, "ok", None)
+    return (src, dst, "error", err)
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -194,10 +333,12 @@ def main():
     ap.add_argument("--crf", type=int, default=23,
                     help="Quality value (default: 23; lower = better quality)")
     ap.add_argument("--preset", default="fast",
-                    help="Encoder preset (default: fast)")
+                    help="Encoder preset for libx264 / QSV (default: fast)")
+    ap.add_argument("--profile", choices=["default", "proxy"], default="default",
+                    help="proxy = faster 480p proxies (crf 27, veryfast / nvenc p6)")
     ap.add_argument("--encoder", default=None,
                     help="Video encoder: auto|libx264|h264_nvenc|h264_amf|h264_qsv "
-                         "(default: FFMPEG_ENCODER env var, or libx264)")
+                         "(default: FFMPEG_ENCODER env var, or auto)")
     ap.add_argument("--hw-decode", dest="hw_decode", nargs="?", const="auto",
                     default=None,
                     help="Enable hardware decode (cuda|d3d11va|qsv|auto). "
@@ -207,10 +348,11 @@ def main():
     ap.add_argument("--suffix", default="",
                     help="Suffix to add before extension, e.g. _480p")
     ap.add_argument("--glob", dest="globs", action="append",
-                    help="Filename glob(s) to match inputs (default: *.mkv *.mp4 *.avi). "
-                         "Repeat to add more patterns.")
+                    help="Filename glob(s) to match inputs (default: *.mkv *.mp4 *.avi)")
     ap.add_argument("--workers", type=int, default=None,
-                    help="Parallel ffmpeg processes (default: 2 for CPU, 4 for GPU)")
+                    help="Parallel ffmpeg processes (default: ~/.dojo_hw_cache.json)")
+    ap.add_argument("--copy-if-small", action=argparse.BooleanOptionalAction, default=True,
+                    help="Remux without re-encoding when source height <= target (default: on)")
     ap.add_argument("--overwrite", action="store_true",
                     help="Re-encode files that already exist in output_dir")
     args = ap.parse_args()
@@ -218,31 +360,50 @@ def main():
     ffmpeg_exe = shutil.which("ffmpeg")
     if not ffmpeg_exe:
         sys.exit("ffmpeg not found. Install from https://ffmpeg.org")
+    ffprobe_exe = shutil.which("ffprobe")
 
-    # Resolve encoder: CLI > env var > auto-detect
+    crf = args.crf
+    preset = args.preset
+    nvenc_preset = "p4"
+    if args.profile == "proxy":
+        crf = 27
+        preset = "veryfast"
+        nvenc_preset = "p6"
+
     encoder_req = args.encoder or os.environ.get("FFMPEG_ENCODER", "auto")
     if encoder_req == "auto":
         sys.stderr.write("Auto-detecting best encoder...\n")
-    encoder = _resolve_encoder(encoder_req)
+    encoder = _resolve_encoder(ffmpeg_exe, encoder_req)
     if encoder_req == "auto" and encoder != "libx264":
         sys.stderr.write(f"Using GPU encoder: {encoder}\n")
     elif encoder_req == "auto":
         sys.stderr.write("No GPU encoder found, using libx264\n")
 
-    # Resolve hwaccel: CLI > env var > cache
-    hwaccel = args.hw_decode or os.environ.get("FFMPEG_HWACCEL") or _load_hw_cache().get("FFMPEG_HWACCEL", "")
+    hwaccel = (
+        args.hw_decode
+        or os.environ.get("FFMPEG_HWACCEL")
+        or _load_hw_cache().get("FFMPEG_HWACCEL", "")
+    )
     if hwaccel == "auto":
-        hwaccel = "cuda" if encoder == "h264_nvenc" else \
-                  "d3d11va" if encoder in ("h264_amf",) else \
-                  "qsv" if encoder == "h264_qsv" else ""
+        hwaccel = (
+            "cuda" if encoder == "h264_nvenc"
+            else "d3d11va" if encoder == "h264_amf"
+            else "qsv" if encoder == "h264_qsv"
+            else ""
+        )
 
-    # Default workers based on encoder type
-    if args.workers is not None:
-        workers = args.workers
-    elif _is_gpu_encoder(encoder):
-        workers = 4   # GPU handles encoding; CPU isn't the bottleneck
-    else:
-        workers = 2   # CPU encoding is expensive; don't oversaturate
+    workers = _resolve_workers(encoder, args.workers)
+    x264_threads = max(1, _logical_cores() // workers) if encoder == "libx264" else 0
+
+    scale_cuda_ok = False
+    if hwaccel == "cuda" and encoder in ("h264_nvenc", "hevc_nvenc"):
+        scale_cuda_ok = _test_scale_cuda(ffmpeg_exe)
+        if scale_cuda_ok:
+            sys.stderr.write("Using scale_cuda for GPU decode/scale/encode pipeline\n")
+        else:
+            sys.stderr.write(
+                "scale_cuda unavailable; falling back to CPU scale with CUDA decode\n"
+            )
 
     patterns = args.globs or ["*.mkv", "*.mp4", "*.avi"]
     inputs = []
@@ -262,16 +423,36 @@ def main():
         jobs.append((src, dst))
 
     hw_label = f", hwaccel={hwaccel}" if hwaccel and hwaccel not in ("", "none") else ""
+    profile_label = f", profile={args.profile}" if args.profile != "default" else ""
     print(f"Transcoding {len(jobs)} file(s) → {args.output_dir}")
-    print(f"  encoder={encoder}, {args.height}p, quality={args.crf}, "
-          f"preset={args.preset}{hw_label}, workers={workers}")
+    print(
+        f"  encoder={encoder}, {args.height}p, quality={crf}, preset={preset}, "
+        f"nvenc_preset={nvenc_preset}{hw_label}{profile_label}, workers={workers}"
+    )
+    if encoder == "libx264":
+        print(f"  libx264 threads per job: {x264_threads}")
+    if args.copy_if_small:
+        print("  copy-if-small: on (remux when source height <= target)")
 
-    ok = skipped = errors = 0
+    ok = copied = skipped = errors = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
-                _transcode, ffmpeg_exe, src, dst,
-                encoder, args.height, args.crf, args.preset, hwaccel, args.overwrite
+                _transcode,
+                ffmpeg_exe,
+                ffprobe_exe,
+                src,
+                dst,
+                encoder,
+                args.height,
+                crf,
+                preset,
+                hwaccel,
+                scale_cuda_ok,
+                nvenc_preset,
+                x264_threads,
+                args.copy_if_small,
+                args.overwrite,
             ): (src, dst)
             for src, dst in jobs
         }
@@ -280,10 +461,17 @@ def main():
             done += 1
             src, dst, status, err = future.result()
             name = os.path.basename(src)
-            if status == "ok":
-                ok += 1
+            if status in ("ok", "copied"):
+                if status == "ok":
+                    ok += 1
+                else:
+                    copied += 1
                 size_mb = os.path.getsize(dst) / 1_048_576
-                print(f"  [{done}/{len(jobs)}] {name}  →  {os.path.basename(dst)}  ({size_mb:.0f} MB)")
+                label = "remuxed" if status == "copied" else "encoded"
+                print(
+                    f"  [{done}/{len(jobs)}] {name}  →  {os.path.basename(dst)}  "
+                    f"({size_mb:.0f} MB, {label})"
+                )
             elif status == "skipped":
                 skipped += 1
                 print(f"  [{done}/{len(jobs)}] {name}  skipped (already exists)")
@@ -291,11 +479,10 @@ def main():
                 errors += 1
                 print(f"  [{done}/{len(jobs)}] {name}  ERROR")
                 if err:
-                    # Print last few lines of ffmpeg stderr for diagnosis
                     for line in err.splitlines()[-5:]:
                         print(f"    {line}")
 
-    print(f"\nDone: {ok} transcoded, {skipped} skipped, {errors} errors.")
+    print(f"\nDone: {ok} encoded, {copied} remuxed, {skipped} skipped, {errors} errors.")
     if errors:
         sys.exit(1)
 

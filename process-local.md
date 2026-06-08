@@ -3,7 +3,7 @@ name: process-local
 description: |
   Process locally stored video files (downloaded anime, movies, dramas) into
   study materials. Downloads Japanese subtitles from jimaku.cc, syncs them to
-  the video automatically using ffsubsync, and generates subs2cia Anki decks
+  the video automatically using ffsubsync, and generates content2srs Anki decks
   and/or condensed audio. Falls back to AI transcription if no good subtitle
   match is found.
 allowed-tools:
@@ -29,7 +29,7 @@ Run `/process-local` and the skill will walk you through the process.
 
 - `ffsubsync` — `pip install ffsubsync`
 - `JIMAKU_API_KEY` — generate at [jimaku.cc/account](https://jimaku.cc/account)
-- subs2cia, ffmpeg, and the other standard dojo dependencies
+- content2srs binary, ffmpeg, and the other standard dojo dependencies
 
 ## Folder conventions
 
@@ -50,21 +50,20 @@ VIDEO_DIR/
     {PREFIX}/
       subs_download/               ← jimaku subtitle candidates
       synced_subs/                 ← synced SRT files
-      out_srs/                     ← subs2cia audio clips, screenshots, per-episode TSVs
-      combined.tsv                 ← merged TSV (all episodes)
+      summaries.json               ← episode briefings (generated before content2srs build)
+      {PREFIX}.db                  ← content2srs bundle (audio/image blobs + cards)
       {PREFIX}_ep01.json           ← AI transcriptions (expensive — kept until archived)
       {PREFIX}.apkg                ← final deck (before archiving)
 
 DOJO_DIR/archive/{PREFIX}/        ← permanent archive (created at the end)
   {PREFIX}.apkg
-  combined.tsv
   {PREFIX}_ep01.json               ← transcriptions moved here
 ```
 
 **Rules:**
 - All intermediate work goes under `VIDEO_DIR/DOJO_TEMP/{PREFIX}/` — one place, one prefix
-- Do NOT delete `DOJO_TEMP/{PREFIX}/` until the deck is imported into Anki and confirmed good — it contains expensive files (transcriptions, subs2cia output) that are slow to regenerate
-- After the deck is verified: copy `{PREFIX}.apkg`, `combined.tsv`, and any `*.json` files to `DOJO_DIR/archive/{PREFIX}/`, then `rm -rf VIDEO_DIR/DOJO_TEMP/{PREFIX}/`
+- Do NOT delete `DOJO_TEMP/{PREFIX}/` until the deck is imported into Anki and confirmed good — it contains expensive files (transcriptions, content2srs bundle) that are slow to regenerate
+- After the deck is verified: copy `{PREFIX}.apkg` and any `*.json` files to `DOJO_DIR/archive/{PREFIX}/`, then `rm -rf VIDEO_DIR/DOJO_TEMP/{PREFIX}/`
 
 Set these at the start of every session:
 
@@ -72,8 +71,9 @@ Set these at the start of every session:
 PREFIX="hunterxhunter"               # ← change this
 VIDEO_DIR="/d/anime/hunterxhunter"   # ← change this
 DOJO_DIR="C:/Users/snoozy/Desktop/dojo"
+CONTENT2SRS="$DOJO_DIR/content2srs/target/release/content2srs.exe"
 TEMP="$VIDEO_DIR/DOJO_TEMP/$PREFIX"
-mkdir -p "$TEMP/subs_download" "$TEMP/synced_subs" "$TEMP/out_srs"
+mkdir -p "$TEMP/subs_download" "$TEMP/synced_subs"
 ```
 
 ## Workflow
@@ -124,7 +124,7 @@ python3 dojo-prompts/scripts/transcode_batch.py "$VIDEO_DIR" "$VIDEO_DIR/480p" \
 ```
 This transcodes all videos in parallel. GPU encoding (NVENC/AMF/QuickSync) is
 5–10× faster than CPU for large batches or long files. Use the transcoded
-versions for subs2cia only — keep the originals.
+versions for content2srs only — keep the originals.
 
 ### 3. Search jimaku.cc for subtitles
 
@@ -174,11 +174,7 @@ have English as audio stream 0 and Japanese as stream 1. ffsubsync defaults to
 stream 0, so syncing Japanese subtitles against English audio produces wildly
 wrong offsets (often 25–60 s off). `sync_subs.py` auto-detects this via
 ffprobe and passes `--reference-stream a:N` to ffsubsync automatically — no
-extra flags needed. If auto-detection fails, override manually:
-```bash
-python3 dojo-prompts/scripts/sync_subs.py video.mkv subs/ -o out.srt \
-  --reference-stream a:1
-```
+extra flags needed.
 
 **Decision tree (applied automatically):**
 
@@ -190,10 +186,7 @@ python3 dojo-prompts/scripts/sync_subs.py video.mkv subs/ -o out.srt \
 | > 300s or error | **Discarded** |
 
 **For a folder of videos**, test against episode 1 first to identify the best
-subtitle group. Then use `--episode N` for each subsequent episode — most
-series use the same group throughout, so the same source that matched episode 1
-will usually work for the rest. Confirm episode-by-episode only if offsets vary
-significantly.
+subtitle group. Then use `--episode N` for each subsequent episode.
 
 If `sync_subs.py` exits with code 1 (no candidate passed the threshold), fall
 back to AI transcription for that episode (see step 6).
@@ -210,53 +203,77 @@ python3 dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox> \
 
 Output JSON lands in `$TEMP/` (e.g. `$TEMP/hunterxhunter_ep01.json`). These
 files are expensive to regenerate — they stay in DOJO_TEMP until the deck is
-verified, then get moved to the archive alongside the apkg. Treat the JSON the
-same as a synced SRT for downstream processing.
+verified, then get moved to the archive alongside the apkg. Treat the JSON
+the same as a synced SRT for downstream processing (content2srs accepts both).
 
 ### 7. Generate outputs
 
-Use the synced subtitle files (or transcript JSON from AI fallback) as input
-to the requested output skills. Read the relevant skill files for full
-instructions:
+Use the synced subtitle files (or transcript JSON from AI fallback) as input.
 
-**Anki deck** — read `anki.md`. Before running subs2cia, always identify the Japanese audio stream with ffprobe — never assume stream 0 is Japanese:
+**Anki deck** — Read `anki.md` for full instructions. Before running content2srs, always identify the Japanese audio stream with ffprobe:
+
 ```bash
 # Always run this first
 ffprobe -v error -select_streams a \
   -show_entries stream=index:stream_tags=language,title \
   -of csv=p=0 "video.mkv"
 ```
-Use the resulting Japanese stream index as `-ai`. Also check whether the subtitle file is pure Japanese (see the "Multi-language subtitle files" section in `anki.md`) — dual-language ASS files from fansubs will produce mixed-language cards.
 
-```bash
-# Single episode — output to TEMP/out_srs
-PYTHONUTF8=1 subs2cia srs -i "video.mkv" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
-  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
+Also check whether the subtitle file is pure Japanese (see the "Multi-language subtitle files" section in `anki.md`) — dual-language ASS files from fansubs will produce mixed-language cards.
 
-# Multi-episode batch
-PYTHONUTF8=1 subs2cia srs -b -j 4 -i "$VIDEO_DIR/480p"/*.mkv \
-  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
+**Generate episode briefings** before running content2srs. For each episode, read the subtitle text and generate a translation briefing (see Episode Summary Format in `anki.md`). Write all briefings to `$TEMP/summaries.json`:
 
-# With JSON (from AI transcription fallback)
-PYTHONUTF8=1 subs2cia srs -i "video.mp4" "$TEMP/${PREFIX}_ep01.json" \
-  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
+```json
+{
+  "sources": {
+    "show_ep01.mkv": "Episode 1 briefing...",
+    "show_ep02.mkv": "Episode 2 briefing..."
+  }
+}
 ```
 
-`srs` clips audio directly from the source container — no FLAC demux step. Run `hw_probe.py` once so `SUBS2CIA_WORKERS`, `SUBS2CIA_JOBS`, and `SUBS2CIA_HWACCEL` are cached.
-Then follow the full anki.md workflow (episode summaries → combine TSVs → export `.apkg` to `$TEMP/${PREFIX}.apkg`).
+**Run content2srs** — pass all videos and synced subs together; they pair by stem:
 
-**Condensed audio** — read `condensed-audio.md`. Same ffprobe check applies — always identify the Japanese audio stream first and pass `-ai <jp_index>`. For multiple files, add `-b -j N`:
 ```bash
-# With synced SRT:
-PYTHONUTF8=1 subs2cia condense -i "video.mp4" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
-  -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d "$TEMP/out_condense"
+# Multi-episode batch (synced subs in TEMP/synced_subs/, videos in 480p/)
+"$CONTENT2SRS" build -b -j 4 \
+  -i "$VIDEO_DIR/480p/"*.mkv "$TEMP/synced_subs/"*.srt \
+  --audio-index <jp_audio_index> --loudnorm -p 500 \
+  --summaries "$TEMP/summaries.json" \
+  --deck-name "$PREFIX" \
+  -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"
 
-# Multi-episode batch:
-PYTHONUTF8=1 subs2cia condense -b -j 4 -i "$VIDEO_DIR"/*.mp4 \
+# Single episode
+"$CONTENT2SRS" build \
+  -i "$VIDEO_DIR/480p/show_ep01.mkv" -s "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
+  --audio-index <jp_audio_index> --loudnorm -p 500 \
+  --deck-name "$PREFIX" \
+  -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"
+
+# With JSON fallback (content2srs accepts .json directly, same as .srt)
+"$CONTENT2SRS" build \
+  -i "video.mp4" -s "$TEMP/${PREFIX}_ep01.json" \
+  --audio-index <jp_audio_index> --loudnorm -p 500 \
+  --deck-name "$PREFIX" \
+  -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"
+```
+
+If summaries weren't passed via `--summaries`, add them after and re-export:
+```bash
+"$CONTENT2SRS" summary import -i "$TEMP/$PREFIX.db" -f "$TEMP/summaries.json"
+"$CONTENT2SRS" export -i "$TEMP/$PREFIX.db" -o "$TEMP/$PREFIX.apkg" --deck-name "$PREFIX"
+```
+
+**Condensed audio** — read `condensed-audio.md`. Same ffprobe check applies. Uses subs2cia condense (not content2srs):
+```bash
+SUBS2CIA="C:/Users/snoozy/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0/LocalCache/local-packages/Python313/Scripts/subs2cia.exe"
+
+# With synced SRT:
+PYTHONUTF8=1 "$SUBS2CIA" condense -i "video.mp4" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
   -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d "$TEMP/out_condense"
 
 # With JSON:
-PYTHONUTF8=1 subs2cia condense -i "video.mp4" "$TEMP/${PREFIX}_ep01.json" \
+PYTHONUTF8=1 "$SUBS2CIA" condense -i "video.mp4" "$TEMP/${PREFIX}_ep01.json" \
   -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d "$TEMP/out_condense"
 ```
 
@@ -279,7 +296,6 @@ mkdir -p "$DOJO_DIR/archive/$PREFIX"
 
 # 2. Copy the permanent outputs
 cp "$TEMP/$PREFIX.apkg"   "$DOJO_DIR/archive/$PREFIX/"
-cp "$TEMP/combined.tsv"   "$DOJO_DIR/archive/$PREFIX/"
 cp "$TEMP/"*.json         "$DOJO_DIR/archive/$PREFIX/" 2>/dev/null || true  # AI transcriptions
 
 # 3. Delete the temp folder — all intermediate work gone
@@ -303,10 +319,14 @@ Tell the user:
   right episode will almost always sync correctly even if the timing source
   differs (BD vs WEB, etc.).
 
-- **Hardcoded subtitles (PGS/bitmap)**: subs2cia can only work with text
-  subtitles (SRT, ASS). If the video has only PGS/bitmap subs embedded, you
-  must use AI transcription — there's no way to extract text from image subs.
-  Check with:
+- **Subtitle pairing in batch mode**: content2srs pairs videos and subtitle files
+  by filename stem — `ep01.mkv` pairs with `ep01.srt`. The synced subs in
+  `$TEMP/synced_subs/` should have stems matching the video files in the 480p/
+  folder. Name them accordingly when running sync_subs.py.
+
+- **Hardcoded subtitles (PGS/bitmap)**: content2srs can only work with text
+  subtitles (SRT, ASS, JSON). If the video has only PGS/bitmap subs embedded,
+  you must use AI transcription. Check with:
   ```bash
   ffprobe -v error -select_streams s -show_entries stream=codec_name:stream_tags=language \
     -of csv=p=0 "video.mp4"
