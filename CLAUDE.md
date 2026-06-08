@@ -68,8 +68,10 @@ ffprobe -v error -select_streams a \
 #   -show_entries stream=index:stream_tags=language,title \
 #   -of csv=p=0 "$VIDEO_DIR/480p/show_01.mkv"
 #
-# Then run subs2cia with the Japanese stream index (-ai is always required):
-PYTHONUTF8=1 subs2cia srs \
+# Then run subs2cia with the Japanese stream index (-ai is always required).
+# srs reads audio directly from the container (no FLAC demux). Use -b -j for multi-episode batches.
+# hw_probe.py caches SUBS2CIA_WORKERS, SUBS2CIA_JOBS, and SUBS2CIA_HWACCEL — no env vars needed.
+PYTHONUTF8=1 subs2cia srs -b -j 4 \
   -i "$VIDEO_DIR/480p/show_01.mkv" synced_subs/show_01.srt \
   -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
 
@@ -126,7 +128,16 @@ python3 dojo-prompts/scripts/hw_probe.py --check
   python3 dojo-prompts/scripts/hw_probe.py
   ```
 
-After the cache exists, all tools auto-use the detected GPU encoder, hardware decode accelerator, and optimal worker count — no env vars needed.
+After the cache exists, all tools auto-use the detected GPU encoder, hardware decode accelerator, and subs2cia parallelism settings — no env vars needed. The cache stores:
+
+| Key | Purpose |
+|---|---|
+| `SUBS2CIA_HWACCEL` | GPU decode for screenshot seeks |
+| `SUBS2CIA_WORKERS` | Per-episode card export threads |
+| `SUBS2CIA_JOBS` | Parallel episodes in batch mode (`-b -j`) |
+| `FFMPEG_ENCODER` / `FFMPEG_HWACCEL` | Used by `transcode_batch.py` |
+
+When `SUBS2CIA_JOBS > 1`, per-episode card workers scale down automatically (`WORKERS // JOBS`).
 
 ## Dependency checks
 

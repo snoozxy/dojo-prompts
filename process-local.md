@@ -182,18 +182,26 @@ ffprobe -v error -select_streams a \
 Use the resulting Japanese stream index as `-ai`. Also check whether the subtitle file is pure Japanese (see the "Multi-language subtitle files" section in `anki.md`) — dual-language ASS files from fansubs will produce mixed-language cards.
 
 ```bash
-# With synced SRT — -ai is always required (use index from ffprobe above)
+# Single episode — -ai always required (index from ffprobe above)
 PYTHONUTF8=1 subs2cia srs -i "video.mkv" "video.synced.srt" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+
+# Multi-episode batch — add -b -j (from hw_probe cache or SUBS2CIA_JOBS)
+PYTHONUTF8=1 subs2cia srs -b -j 4 -i "$VIDEO_DIR/480p"/*.mkv -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
 
 # With JSON (from AI transcription fallback) — -ai still required
 PYTHONUTF8=1 subs2cia srs -i "video.mp4" "video.json" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
 ```
+
+`srs` clips audio directly from the source container — no FLAC demux step. Run `hw_probe.py` once so `SUBS2CIA_WORKERS`, `SUBS2CIA_JOBS`, and `SUBS2CIA_HWACCEL` are cached.
 Then follow the full anki.md workflow (episode summaries → combine TSVs → export .apkg).
 
-**Condensed audio** — read `condensed-audio.md`. Same ffprobe check applies — always identify the Japanese audio stream first and pass `-ai <jp_index>`:
+**Condensed audio** — read `condensed-audio.md`. Same ffprobe check applies — always identify the Japanese audio stream first and pass `-ai <jp_index>`. For multiple files, add `-b -j N`:
 ```bash
 # With synced SRT:
 PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.synced.srt" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
+
+# Multi-episode batch:
+PYTHONUTF8=1 subs2cia condense -b -j 4 -i "$VIDEO_DIR"/*.mp4 -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
 
 # With JSON:
 PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.json" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense

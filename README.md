@@ -43,7 +43,16 @@ Run once per machine to detect your GPU and optimal settings:
 python3 dojo-prompts/scripts/hw_probe.py
 ```
 
-After this, `transcode_batch.py` and [snoozxy/subs2cia](https://github.com/snoozxy/subs2cia) automatically use GPU encoding and hardware-accelerated decode from the cache — no env vars needed.
+After this, `transcode_batch.py` and [snoozxy/subs2cia](https://github.com/snoozxy/subs2cia) automatically read from the cache — no env vars needed:
+
+| Cache key | Used by |
+|---|---|
+| `FFMPEG_ENCODER` / `FFMPEG_HWACCEL` | `transcode_batch.py` |
+| `SUBS2CIA_HWACCEL` | Screenshot GPU decode in `srs` |
+| `SUBS2CIA_WORKERS` | Per-episode card export parallelism |
+| `SUBS2CIA_JOBS` | Multi-episode batch parallelism (`subs2cia -b -j`) |
+
+Re-run `hw_probe.py` after upgrading subs2cia or changing hardware.
 
 ### subs2cia fork
 

@@ -9,7 +9,8 @@ Output includes CPU, RAM, GPU, available ffmpeg encoders, and the exact env
 vars / flags to set for maximum performance.
 
 Environment vars the tools will read (set these once in your shell profile):
-    SUBS2CIA_WORKERS=N       CardExport parallel workers (default: cpu_count)
+    SUBS2CIA_WORKERS=N       Per-episode card export threads (default: cpu_count)
+    SUBS2CIA_JOBS=N          Parallel episodes in batch mode (default: min(cpu_count // 2, 4))
     SUBS2CIA_HWACCEL=cuda    Hardware accelerator for ffmpeg decode (cuda | d3d11va | none)
     FFMPEG_ENCODER=h264_nvenc  Hardware encoder for transcode_batch.py
     FFMPEG_HWACCEL=cuda      Hardware accelerator for transcode_batch.py decode
@@ -249,6 +250,7 @@ def recommend(cpu, ram, gpus, ffmpeg_info):
     # Workers for CardExport (subs2cia)
     cores = cpu["logical_cores"]
     recs["SUBS2CIA_WORKERS"] = str(cores)
+    recs["SUBS2CIA_JOBS"] = str(max(1, min(cores // 2, 4)))
 
     # ffmpeg encoder
     enc = ffmpeg_info.get("encoders", {})

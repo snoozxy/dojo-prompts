@@ -75,6 +75,9 @@ PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.json" -ai <jp_audio_index> 
 # With external SRT (fallback)
 PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.srt" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
 
+# Multi-episode batch — -j from hw_probe cache (SUBS2CIA_JOBS) or set explicitly
+PYTHONUTF8=1 subs2cia condense -b -j 4 -i "*.mp4" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
+
 # With embedded subtitle tracks (last resort) — check subtitle stream index with ffprobe too
 # ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language,title -of csv=p=0 "video.mp4"
 PYTHONUTF8=1 subs2cia condense -i "video.mp4" -ai <jp_audio_index> -si <jp_subtitle_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense

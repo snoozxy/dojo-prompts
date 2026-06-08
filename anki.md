@@ -34,6 +34,13 @@ pip3 install --upgrade git+https://github.com/snoozxy/subs2cia.git
 
 Do not proceed until the correct fork is installed and up to date.
 
+### Performance (snoozxy fork)
+
+- **`srs` reads audio directly from the source container** via `-ai` — no upfront FLAC demux.
+- **Batch multi-episode runs**: use `-b -j N` (e.g. `-j 4`). `hw_probe.py` caches `SUBS2CIA_JOBS` and `SUBS2CIA_WORKERS`.
+- **Single episode**: `-j` is optional; per-card parallelism still uses `SUBS2CIA_WORKERS` from the cache.
+- Audio clips use fast input-side seek (few ms tolerance; `-p` padding covers it).
+
 ## Usage
 
 The user provides a source directory containing video files (typically .mp4 with target language audio and subtitles). The skill processes all videos and outputs a single .apkg Anki deck. The user is an English speaker. The default target language is **Japanese**, but the user may specify another language.
@@ -114,11 +121,12 @@ subs2cia srs -i "video.mp4" "transcript.json" -ai <jp_audio_index> -p 500 -N -d 
 
 # With external SRT (fallback — subs2cia picks it up by filename match)
 # Still need -ai for correct audio; -si is not needed for external files
-subs2cia srs -b -i "*.mp4" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+# -j: parallel episodes (from hw_probe cache or SUBS2CIA_JOBS); omit for single file
+subs2cia srs -b -j 4 -i "*.mp4" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
 
 # With embedded subtitle tracks (last resort)
 # Both -ai and -si must come from ffprobe — never hardcode 0
-subs2cia srs -b -i "*.mp4" -ai <jp_audio_index> -si <jp_subtitle_index> -p 500 -N -d out_srs --export-header-row
+subs2cia srs -b -j 4 -i "*.mp4" -ai <jp_audio_index> -si <jp_subtitle_index> -p 500 -N -d out_srs --export-header-row
 ```
 
 ### Parameters Explained
@@ -127,8 +135,9 @@ subs2cia srs -b -i "*.mp4" -ai <jp_audio_index> -si <jp_subtitle_index> -p 500 -
 |------|-------|---------|
 | `srs` | - | SRS subcommand (creates Anki-ready output) |
 | `-b` | - | Batch mode (process multiple files) |
+| `-j` | `4` | Parallel episodes in batch mode (from `hw_probe` cache or `SUBS2CIA_JOBS`) |
 | `-i` | `"*.mp4" "*.json"` | Input files (video + JSON or video + subtitle) |
-| `-ai` | `0` | Audio stream index (only needed with embedded tracks) |
+| `-ai` | `0` | Japanese audio stream index in the source container (always required) |
 | `-si` | `0` | Subtitle stream index (only needed with embedded tracks) |
 | `-p` | `500` | Padding in ms around each subtitle line |
 | `-N` | - | Normalize audio levels |
@@ -206,9 +215,9 @@ done
 # With JSON (preferred) — -ai is still required:
 PYTHONUTF8=1 subs2cia srs -i "video.mp4" "transcript.json" -ai $JP_AUDIO_INDEX -p 500 -N -d out_srs --export-header-row
 # With external SRT (fallback) — -si not needed, external file is picked up by name:
-PYTHONUTF8=1 subs2cia srs -b -i "*.mp4" -ai $JP_AUDIO_INDEX -p 500 -N -d out_srs --export-header-row
+PYTHONUTF8=1 subs2cia srs -b -j 4 -i "*.mp4" -ai $JP_AUDIO_INDEX -p 500 -N -d out_srs --export-header-row
 # With embedded subs (last resort) — both indices required:
-PYTHONUTF8=1 subs2cia srs -b -i "*.mp4" -ai $JP_AUDIO_INDEX -si $JP_SUB_INDEX -p 500 -N -d out_srs --export-header-row
+PYTHONUTF8=1 subs2cia srs -b -j 4 -i "*.mp4" -ai $JP_AUDIO_INDEX -si $JP_SUB_INDEX -p 500 -N -d out_srs --export-header-row
 
 # 5. Generate episode summaries and prepend to context column
 #    Launch subagents in parallel (one per TSV) to:
