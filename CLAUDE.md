@@ -42,7 +42,15 @@ local video files
 
 **Don't skip the episode summary step.** It prepends a translation briefing to every card's context column, which makes LLM-assisted study much more useful. Read `anki.md` for the summary format.
 
-Key commands (fill in actual paths):
+Key commands (fill in actual paths). Set these variables first — every path derives from them:
+```bash
+PREFIX="hunterxhunter"               # short lowercase slug for this run
+VIDEO_DIR="/d/anime/hunterxhunter"   # folder with the video files
+DOJO_DIR="C:/Users/snoozy/Desktop/dojo"
+TEMP="$VIDEO_DIR/DOJO_TEMP/$PREFIX"
+mkdir -p "$TEMP/subs_download" "$TEMP/synced_subs" "$TEMP/out_srs"
+```
+
 ```bash
 # 1. Hardware check (once — skip if ~/.dojo_hw_cache.json exists and is recent)
 python3 dojo-prompts/scripts/hw_probe.py --check || python3 dojo-prompts/scripts/hw_probe.py
@@ -52,11 +60,11 @@ python3 dojo-prompts/scripts/transcode_batch.py "$VIDEO_DIR" "$VIDEO_DIR/480p" -
 
 # 3. Search jimaku.cc for subtitles (requires $JIMAKU_API_KEY)
 python3 dojo-prompts/scripts/jimaku_dl.py search "Show Name"
-python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out subs_download/
+python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out "$TEMP/subs_download"
 
 # 4. Sync subtitles (test all candidates, pick best)
-python3 dojo-prompts/scripts/sync_subs.py video_01.mkv subs_download/ \
-  -o synced_subs/show_01.srt --episode 1
+python3 dojo-prompts/scripts/sync_subs.py "$VIDEO_DIR/480p/show_01.mkv" "$TEMP/subs_download/" \
+  -o "$TEMP/synced_subs/${PREFIX}_ep01.srt" --episode 1
 
 # 5. Identify Japanese audio (and subtitle) stream indices — ALWAYS do this first.
 # Many encodes put English audio at stream 0. Never assume 0 is Japanese.
@@ -72,21 +80,25 @@ ffprobe -v error -select_streams a \
 # srs reads audio directly from the container (no FLAC demux). Use -b -j for multi-episode batches.
 # hw_probe.py caches SUBS2CIA_WORKERS, SUBS2CIA_JOBS, and SUBS2CIA_HWACCEL — no env vars needed.
 PYTHONUTF8=1 subs2cia srs -b -j 4 \
-  -i "$VIDEO_DIR/480p/show_01.mkv" synced_subs/show_01.srt \
-  -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+  -i "$VIDEO_DIR/480p/show_01.mkv" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
+  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
 
 # 6. Generate episode summary and prepend to context column
-python3 dojo-prompts/scripts/prepend_summary.py out_srs/show_01.tsv "EPISODE_SUMMARY"
+python3 dojo-prompts/scripts/prepend_summary.py "$TEMP/out_srs/show_01.tsv" "EPISODE_SUMMARY"
 
 # 7. Combine all TSVs
-python3 dojo-prompts/scripts/combine_tsv.py out_srs/ out_srs/combined.tsv
+python3 dojo-prompts/scripts/combine_tsv.py "$TEMP/out_srs/" "$TEMP/combined.tsv"
 
 # 8. Export .apkg
 python3 dojo-prompts/scripts/apkg_export.py \
-  out_srs/combined.tsv out_srs/ "show_name" "$VIDEO_DIR"
-```
+  "$TEMP/combined.tsv" "$TEMP/out_srs/" "$PREFIX" "$VIDEO_DIR"
 
-After the .apkg is created, delete the `out_srs/` directory — everything is embedded in the package.
+# 9. After verifying the deck in Anki — archive and clean up
+mkdir -p "$DOJO_DIR/archive/$PREFIX"
+cp "$TEMP/$PREFIX.apkg" "$TEMP/combined.tsv" "$DOJO_DIR/archive/$PREFIX/"
+cp "$TEMP/"*.json "$DOJO_DIR/archive/$PREFIX/" 2>/dev/null || true
+rm -rf "$VIDEO_DIR/DOJO_TEMP/$PREFIX"
+```
 
 ## Scripts reference
 

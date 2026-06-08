@@ -31,6 +31,51 @@ Run `/process-local` and the skill will walk you through the process.
 - `JIMAKU_API_KEY` — generate at [jimaku.cc/account](https://jimaku.cc/account)
 - subs2cia, ffmpeg, and the other standard dojo dependencies
 
+## Folder conventions
+
+Establish these two variables before doing anything else. Every path in the workflow is derived from them.
+
+**`PREFIX`** — a short, lowercase ASCII slug for this run. Use the show name with no spaces: `hunterxhunter`, `oshi_no_ko_s2`. For a playlist where you're processing a specific episode, append the number: `minecraft_letsplay_31`. This slug appears in every filename and folder so nothing gets mixed up across projects.
+
+**`VIDEO_DIR`** — the folder containing the source video files. This may be on a separate drive. All processing happens here so large I/O stays local to the drive.
+
+**`DOJO_DIR`** — `C:/Users/snoozy/Desktop/dojo` (always).
+
+**Layout:**
+
+```
+VIDEO_DIR/
+  480p/                            ← transcoded copies (optional, kept until deck verified)
+  DOJO_TEMP/
+    {PREFIX}/
+      subs_download/               ← jimaku subtitle candidates
+      synced_subs/                 ← synced SRT files
+      out_srs/                     ← subs2cia audio clips, screenshots, per-episode TSVs
+      combined.tsv                 ← merged TSV (all episodes)
+      {PREFIX}_ep01.json           ← AI transcriptions (expensive — kept until archived)
+      {PREFIX}.apkg                ← final deck (before archiving)
+
+DOJO_DIR/archive/{PREFIX}/        ← permanent archive (created at the end)
+  {PREFIX}.apkg
+  combined.tsv
+  {PREFIX}_ep01.json               ← transcriptions moved here
+```
+
+**Rules:**
+- All intermediate work goes under `VIDEO_DIR/DOJO_TEMP/{PREFIX}/` — one place, one prefix
+- Do NOT delete `DOJO_TEMP/{PREFIX}/` until the deck is imported into Anki and confirmed good — it contains expensive files (transcriptions, subs2cia output) that are slow to regenerate
+- After the deck is verified: copy `{PREFIX}.apkg`, `combined.tsv`, and any `*.json` files to `DOJO_DIR/archive/{PREFIX}/`, then `rm -rf VIDEO_DIR/DOJO_TEMP/{PREFIX}/`
+
+Set these at the start of every session:
+
+```bash
+PREFIX="hunterxhunter"               # ← change this
+VIDEO_DIR="/d/anime/hunterxhunter"   # ← change this
+DOJO_DIR="C:/Users/snoozy/Desktop/dojo"
+TEMP="$VIDEO_DIR/DOJO_TEMP/$PREFIX"
+mkdir -p "$TEMP/subs_download" "$TEMP/synced_subs" "$TEMP/out_srs"
+```
+
 ## Workflow
 
 ### 1. Gather inputs up front
@@ -38,21 +83,22 @@ Run `/process-local` and the skill will walk you through the process.
 Ask the user for:
 
 1. **Path** — a single video file, or a folder of videos for a series
-2. **Outputs** — what they want generated:
+2. **Prefix** — a short lowercase slug for this run (e.g. `hunterxhunter`). Suggest one based on the show name; let the user confirm or change it.
+3. **Outputs** — what they want generated:
    - **Anki deck** — flashcards with audio clips and screenshots
    - **Condensed audio** — spoken audio only, for passive listening
    - **Japanese subtitles** — SRT for watching
    - **English subtitles** — translated SRT
-3. **Video quality for screenshots** — for Anki decks, screenshots come from the
+4. **Video quality for screenshots** — for Anki decks, screenshots come from the
    source video. Ask: *"Use original resolution or transcode to 480p first?
    480p is much smaller and still readable in Anki."*
-4. **Jimaku API key** — check `$JIMAKU_API_KEY`; if not set, ask the user to
+5. **Jimaku API key** — check `$JIMAKU_API_KEY`; if not set, ask the user to
    paste it and export it:
    ```bash
    export JIMAKU_API_KEY="<key>"
    ```
 
-Wait for all answers before doing anything.
+Wait for all answers, then set up the folder structure (see **Folder conventions** above) before doing anything else.
 
 ### 2. Prepare video files
 
@@ -95,10 +141,9 @@ Japanese name, romanized name).
 
 ### 4. Download subtitle files
 
-Download all subtitle files for the entry into a temp directory:
+Download all subtitle files for the entry into the temp directory:
 ```bash
-mkdir -p subs_download
-python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out subs_download
+python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out "$TEMP/subs_download"
 ```
 
 This downloads all files (extracting from zips automatically). You'll end up
@@ -106,7 +151,7 @@ with a collection of `.srt` and/or `.ass` files from various fansub groups.
 
 **For large series**, if there are many files you can filter by episode:
 ```bash
-python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --episode 1 --out subs_download
+python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --episode 1 --out "$TEMP/subs_download"
 ```
 
 ### 5. Match and sync subtitles
@@ -117,8 +162,8 @@ the best match:
 ```bash
 # Test all candidates for episode 1, write best match to synced_subs/
 python3 dojo-prompts/scripts/sync_subs.py \
-  "video_01.mkv" subs_download/ \
-  -o synced_subs/video_01.srt --episode 1
+  "video_01.mkv" "$TEMP/subs_download/" \
+  -o "$TEMP/synced_subs/${PREFIX}_ep01.srt" --episode 1
 ```
 
 The script runs ffsubsync on every candidate concurrently, prints a ranked
@@ -160,11 +205,13 @@ transcription for that video. Ask the user which provider to use:
 
 ```bash
 python3 dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox> \
-  --language ja -o <video_stem> video.mp4
+  --language ja -o "$TEMP/${PREFIX}_ep01" video.mp4
 ```
 
-This produces a transcript JSON that feeds directly into the output steps below.
-Treat it the same as a synced SRT for downstream processing.
+Output JSON lands in `$TEMP/` (e.g. `$TEMP/hunterxhunter_ep01.json`). These
+files are expensive to regenerate — they stay in DOJO_TEMP until the deck is
+verified, then get moved to the archive alongside the apkg. Treat the JSON the
+same as a synced SRT for downstream processing.
 
 ### 7. Generate outputs
 
@@ -182,29 +229,35 @@ ffprobe -v error -select_streams a \
 Use the resulting Japanese stream index as `-ai`. Also check whether the subtitle file is pure Japanese (see the "Multi-language subtitle files" section in `anki.md`) — dual-language ASS files from fansubs will produce mixed-language cards.
 
 ```bash
-# Single episode — -ai always required (index from ffprobe above)
-PYTHONUTF8=1 subs2cia srs -i "video.mkv" "video.synced.srt" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+# Single episode — output to TEMP/out_srs
+PYTHONUTF8=1 subs2cia srs -i "video.mkv" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
+  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
 
-# Multi-episode batch — add -b -j (from hw_probe cache or SUBS2CIA_JOBS)
-PYTHONUTF8=1 subs2cia srs -b -j 4 -i "$VIDEO_DIR/480p"/*.mkv -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+# Multi-episode batch
+PYTHONUTF8=1 subs2cia srs -b -j 4 -i "$VIDEO_DIR/480p"/*.mkv \
+  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
 
-# With JSON (from AI transcription fallback) — -ai still required
-PYTHONUTF8=1 subs2cia srs -i "video.mp4" "video.json" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+# With JSON (from AI transcription fallback)
+PYTHONUTF8=1 subs2cia srs -i "video.mp4" "$TEMP/${PREFIX}_ep01.json" \
+  -ai <jp_audio_index> -p 500 -N -d "$TEMP/out_srs" --export-header-row
 ```
 
 `srs` clips audio directly from the source container — no FLAC demux step. Run `hw_probe.py` once so `SUBS2CIA_WORKERS`, `SUBS2CIA_JOBS`, and `SUBS2CIA_HWACCEL` are cached.
-Then follow the full anki.md workflow (episode summaries → combine TSVs → export .apkg).
+Then follow the full anki.md workflow (episode summaries → combine TSVs → export `.apkg` to `$TEMP/${PREFIX}.apkg`).
 
 **Condensed audio** — read `condensed-audio.md`. Same ffprobe check applies — always identify the Japanese audio stream first and pass `-ai <jp_index>`. For multiple files, add `-b -j N`:
 ```bash
 # With synced SRT:
-PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.synced.srt" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
+PYTHONUTF8=1 subs2cia condense -i "video.mp4" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
+  -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d "$TEMP/out_condense"
 
 # Multi-episode batch:
-PYTHONUTF8=1 subs2cia condense -b -j 4 -i "$VIDEO_DIR"/*.mp4 -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
+PYTHONUTF8=1 subs2cia condense -b -j 4 -i "$VIDEO_DIR"/*.mp4 \
+  -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d "$TEMP/out_condense"
 
 # With JSON:
-PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.json" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
+PYTHONUTF8=1 subs2cia condense -i "video.mp4" "$TEMP/${PREFIX}_ep01.json" \
+  -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d "$TEMP/out_condense"
 ```
 
 **Japanese subtitles** — if the synced SRT is already clean Japanese, use it
@@ -216,22 +269,31 @@ python3 dojo-prompts/scripts/srt_watch.py -o <video_stem> <video_stem>.json
 **English subtitles** — read `translate-srt.md`. Works from either the synced
 SRT or the AI transcript JSON.
 
-### 8. Clean up
+### 8. Archive and clean up
 
-Remove the temporary subtitle downloads and any intermediate files:
+Only do this after the user has imported the deck into Anki and confirmed it looks good.
+
 ```bash
-rm -rf subs_download/
-rm -f *.synced.srt      # keep the originals
+# 1. Create the archive folder
+mkdir -p "$DOJO_DIR/archive/$PREFIX"
+
+# 2. Copy the permanent outputs
+cp "$TEMP/$PREFIX.apkg"   "$DOJO_DIR/archive/$PREFIX/"
+cp "$TEMP/combined.tsv"   "$DOJO_DIR/archive/$PREFIX/"
+cp "$TEMP/"*.json         "$DOJO_DIR/archive/$PREFIX/" 2>/dev/null || true  # AI transcriptions
+
+# 3. Delete the temp folder — all intermediate work gone
+rm -rf "$VIDEO_DIR/DOJO_TEMP/$PREFIX"
 ```
 
-Keep: final Anki `.apkg`, condensed MP3s, final SRT files, and any transcript
-JSON files (needed for other workflows).
+The `480p/` transcode folder in `VIDEO_DIR` can also be deleted at this point if disk space is a concern — it can always be regenerated from the originals.
 
 ### 9. Report results
 
 Tell the user:
 - Which subtitle source was used for each video (fansub group + offset, or AI)
-- Where each output file is saved
+- Where the archive was written (`DOJO_DIR/archive/PREFIX/`)
+- Confirmation that `DOJO_TEMP/PREFIX/` has been removed
 
 ## Notes
 
