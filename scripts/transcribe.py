@@ -117,6 +117,7 @@ def _prepare_upload_path(video_path: str, audio_index, extract_audio: bool) -> s
         "-map", selector,
         "-vn",
         "-c:a", "copy",
+        "-f", "matroska",  # explicit format — ffmpeg can't infer from .mka.tmp on Windows
         tmp,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)

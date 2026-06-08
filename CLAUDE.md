@@ -121,6 +121,24 @@ CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs
 
 `sync_subs.py` finds `ffsubsync.exe` automatically using this path — no manual path needed when using the script. Always prefix `subs2cia` commands with `PYTHONUTF8=1` to handle Japanese filenames. `content2srs` handles Unicode natively — no prefix needed.
 
+**YouTube title lookup on Windows** — `yt-dlp --print "%(title)s"` silently garbles or drops Japanese characters (cp1252 shell encoding). Use JSON dump piped through Python with explicit utf-8 output instead:
+
+```bash
+# Get the full title for any video
+PYTHONUTF8=1 yt-dlp --no-download -J "URL" | python3 -c "
+import sys, json, io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+print(json.load(sys.stdin).get('title', ''))
+"
+
+# Get playlist item IDs (no titles — those garble; resolve per-video above)
+yt-dlp --flat-playlist --print "%(playlist_index)s|%(id)s" "PLAYLIST_URL"
+```
+
+To download specific episodes by position: `--playlist-items 19,20` (1-based, matches `playlist_index`).
+
+**content2srs audio-index for YouTube MP4s** — YouTube MP4s have video at global stream 0 and audio at stream 1. Don't pass `--audio-index` for single-audio YouTube files; content2srs auto-detects correctly. Forcing `--audio-index 0` hits the video stream and errors with "no audio stream found".
+
 ## Hardware profile (one-time setup)
 
 Before running `process-local` or `anki` skills (any workflow that transcodes video or runs subs2cia on a large batch), check whether the hardware cache exists:
@@ -190,14 +208,18 @@ If a required tool is missing, just install it and move on. No need to ask — b
 
 ## Important
 
-- **Downloading videos**: Always use yt-dlp and always download as MP4. After downloading, rename files with a romanized version of the full title (see `process-content.md` for detailed naming rules):
+- **Downloading videos**: Always use yt-dlp and always download as MP4. **Always ask the user whether they want 480p (default — smaller files, fine for Anki/audio work) or best available quality (original resolution, much larger) before downloading.** After downloading, rename files with a romanized version of the full title (see `process-content.md` for detailed naming rules):
   ```bash
-  # Single video
-  yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 \
+  # Format strings — pick one based on user's quality choice:
+  FORMAT_480P="bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]"
+  FORMAT_BEST="bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]"
+
+  # Single video (replace $FORMAT with chosen format string above)
+  yt-dlp -f "$FORMAT" --merge-output-format mp4 \
     --concurrent-fragments 4 --retries 10 --fragment-retries 10 --no-playlist \
     -o "%(title)s.%(ext)s" "URL"
   # Playlist or channel
-  yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 \
+  yt-dlp -f "$FORMAT" --merge-output-format mp4 \
     --concurrent-fragments 4 --retries 10 --fragment-retries 10 \
     --download-archive archive.txt \
     -o "%(playlist_index)03d_%(title)s.%(ext)s" "URL"

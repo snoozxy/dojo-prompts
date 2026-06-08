@@ -45,22 +45,28 @@ Then immediately ask what outputs they want:
 
 Also ask **which speech-to-text provider to use — ElevenLabs Scribe v2 or Soniox** — and make sure the matching API key is set (`$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`). Ask this now so the run doesn't pause mid-way.
 
+Also ask **what download quality** they want: **480p** (default — smaller files, fine for Anki/audio work) or **best available** (original quality, much larger).
+
 Wait for the user to answer before starting any work.
 
 ### 2. Run everything
 
 Once you have the URL and know what they want, execute all steps in sequence without further interaction.
 
-**Download** with yt-dlp:
+**Download** with yt-dlp. Use the format string matching the quality the user chose:
 
 ```bash
-# Single video
-yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 \
+# Format strings — pick one based on user's quality choice:
+FORMAT_480P="bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]"
+FORMAT_BEST="bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]"
+
+# Single video (use $FORMAT_480P or $FORMAT_BEST)
+yt-dlp -f "$FORMAT_480P" --merge-output-format mp4 \
   --concurrent-fragments 4 --retries 10 --fragment-retries 10 --no-playlist \
   -o "%(title)s.%(ext)s" "URL"
 
 # Playlist or channel
-yt-dlp -f "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]" --merge-output-format mp4 \
+yt-dlp -f "$FORMAT_480P" --merge-output-format mp4 \
   --concurrent-fragments 4 --retries 10 --fragment-retries 10 \
   --download-archive archive.txt \
   -o "%(playlist_index)03d_%(title)s.%(ext)s" "URL"
