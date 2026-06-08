@@ -40,14 +40,46 @@ The user provides a source directory containing video files (typically .mp4 with
 
 ## Track Selection
 
-Use ffprobe to inspect available audio and subtitle tracks. Select the tracks matching the user's target language. If there are multiple tracks for the same language, ask the user which to use.
+**Always run ffprobe before any subs2cia command.** Never assume stream 0 is Japanese — many encodes (dual-audio WEBRips, EMBER, etc.) put English audio first. The wrong stream produces garbage cards.
 
-### Default (Japanese)
-- **Audio**: `jpn`, `ja`, `japanese`, `日本語`
-- **Subtitles**: `jpn`, `ja`, `japanese`, `日本語`
+```bash
+# Check audio tracks
+ffprobe -v error -select_streams a \
+  -show_entries stream=index:stream_tags=language,title \
+  -of csv=p=0 "video.mkv"
+
+# Check subtitle tracks (only needed for embedded subs)
+ffprobe -v error -select_streams s \
+  -show_entries stream=index:stream_tags=language,title \
+  -of csv=p=0 "video.mkv"
+```
+
+Find the stream index where `language` is `jpn`, `ja`, `japanese`, or `日本語`. Use that index for `-ai` (audio) and `-si` (subtitles). If there are multiple Japanese tracks, ask the user which to use.
 
 ### Other Languages
 Adapt track selection to whatever language the user specifies. Use the same ffprobe approach — match by language code and title tags.
+
+### Multi-language subtitle files
+
+Dual-language fansub ASS files and some jimaku downloads contain both Japanese and English lines in a single file. Passing these directly to subs2cia will mix both languages into card text. Before using an external subtitle file, check whether it's pure Japanese:
+
+```bash
+# Rough check: count CJK characters vs pure-ASCII lines
+python3 -c "
+import re, sys
+lines = open(sys.argv[1], encoding='utf-8', errors='replace').readlines()
+# For ASS: only look at Dialogue lines
+dial = [l for l in lines if l.startswith('Dialogue:')]
+text_lines = dial if dial else lines
+cjk = sum(1 for l in text_lines if re.search(r'[　-鿿＀-￯]', l))
+latin = sum(1 for l in text_lines if re.search(r'[a-zA-Z]{4,}', l) and not re.search(r'[　-鿿]', l))
+print(f'CJK lines: {cjk}, Latin-only lines: {latin}')
+" subtitle.srt
+```
+
+If `latin-only lines` is significant (more than a handful of timing/metadata lines), the file is likely dual-language. Either:
+- Find a Japanese-only subtitle file from the jimaku download set, or
+- Strip English lines from the ASS (for ASS files, English lines typically use a style named `Default` or `English` while Japanese uses `Japanese` or `Subtitle`).
 
 ### Check Available Input Sources
 
@@ -77,10 +109,16 @@ ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=langua
 
 ```bash
 # With JSON (preferred — MeCab sentence segmentation)
-subs2cia srs -i "video.mp4" "transcript.json" -p 500 -N -d out_srs --export-header-row
+# Audio index still required — check with ffprobe first (see Track Selection above)
+subs2cia srs -i "video.mp4" "transcript.json" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
 
-# With SRT (fallback)
-subs2cia srs -b -i "*.mp4" -ai 0 -si 0 -p 500 -N -d out_srs --export-header-row
+# With external SRT (fallback — subs2cia picks it up by filename match)
+# Still need -ai for correct audio; -si is not needed for external files
+subs2cia srs -b -i "*.mp4" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+
+# With embedded subtitle tracks (last resort)
+# Both -ai and -si must come from ffprobe — never hardcode 0
+subs2cia srs -b -i "*.mp4" -ai <jp_audio_index> -si <jp_subtitle_index> -p 500 -N -d out_srs --export-header-row
 ```
 
 ### Parameters Explained
@@ -101,7 +139,7 @@ subs2cia srs -b -i "*.mp4" -ai 0 -si 0 -p 500 -N -d out_srs --export-header-row
 
 1. Get the source directory from the user
 2. **Check available input sources** — look for transcript JSON files first, then external SRT/ASS, then embedded tracks (see priority order above)
-3. **Identify audio tracks** — use ffprobe to find the target language audio stream index (default: Japanese)
+3. **Identify audio and subtitle tracks** — run ffprobe on both audio and subtitle streams (see Track Selection above). Determine the Japanese audio index (`-ai`) and, if using embedded subs, the Japanese subtitle index (`-si`). Also check any external subtitle files for dual-language content before using them.
 4. **Rename source video files if needed** — skip if filenames are already ASCII-safe. Only add episode numbers (`_01`, `_02`) when there are multiple videos. See `process-content.md` for full renaming rules.
 5. Navigate to the source directory
 6. Run subs2cia with JSON input (preferred) or subtitle track indices (fallback)
@@ -139,7 +177,20 @@ SOURCE_DIR="/path/to/source"
 # 2. Check for JSON files first, then SRT/ASS, then embedded tracks
 ls "$SOURCE_DIR"/*.json 2>/dev/null
 ls "$SOURCE_DIR"/*.srt "$SOURCE_DIR"/*.ass 2>/dev/null
-ffprobe -v error -select_streams a -show_entries stream=index:stream_tags=language,title -of csv=p=0 "$SOURCE_DIR"/*.mp4 2>/dev/null | head -5
+
+# Always inspect audio streams — never assume stream 0 is Japanese
+ffprobe -v error -select_streams a \
+  -show_entries stream=index:stream_tags=language,title \
+  -of csv=p=0 "$SOURCE_DIR"/*.mp4 2>/dev/null
+
+# If using embedded subtitle tracks, inspect those too
+ffprobe -v error -select_streams s \
+  -show_entries stream=index:stream_tags=language,title \
+  -of csv=p=0 "$SOURCE_DIR"/*.mp4 2>/dev/null
+
+# Set these based on ffprobe output before running subs2cia
+JP_AUDIO_INDEX=<index_of_jpn_audio_stream>
+JP_SUB_INDEX=<index_of_jpn_subtitle_stream>   # only if using embedded subs
 
 # 3. Rename source video files to standard format
 # Ask user for the show name (e.g., "kiseijuu", "oshi_no_ko_s2")
@@ -152,10 +203,12 @@ for f in *.mp4; do
 done
 
 # 4. Run subs2cia — prefer JSON, fall back to SRT
-# With JSON (preferred):
-subs2cia srs -i "video.mp4" "transcript.json" -p 500 -N -d out_srs --export-header-row
-# With SRT (fallback):
-subs2cia srs -b -i "*.mp4" -ai <audio_index> -si <subtitle_index> -p 500 -N -d out_srs --export-header-row
+# With JSON (preferred) — -ai is still required:
+PYTHONUTF8=1 subs2cia srs -i "video.mp4" "transcript.json" -ai $JP_AUDIO_INDEX -p 500 -N -d out_srs --export-header-row
+# With external SRT (fallback) — -si not needed, external file is picked up by name:
+PYTHONUTF8=1 subs2cia srs -b -i "*.mp4" -ai $JP_AUDIO_INDEX -p 500 -N -d out_srs --export-header-row
+# With embedded subs (last resort) — both indices required:
+PYTHONUTF8=1 subs2cia srs -b -i "*.mp4" -ai $JP_AUDIO_INDEX -si $JP_SUB_INDEX -p 500 -N -d out_srs --export-header-row
 
 # 5. Generate episode summaries and prepend to context column
 #    Launch subagents in parallel (one per TSV) to:

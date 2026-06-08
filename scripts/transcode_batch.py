@@ -40,8 +40,8 @@ Examples:
     python3 scripts/hw_probe.py
 
 Notes:
-    - Audio is copied as-is (-c:a copy). Default stream mapping keeps the first
-      audio track, which is typically the target language on JP releases.
+    - Audio is copied as-is (-c:a copy). All audio tracks are preserved
+      (-map 0:a) so dual-audio encodes keep both English and Japanese.
     - GPU encoders (nvenc/amf/qsv) are significantly faster than libx264 for
       large batches or 10hr+ content, with minimal quality difference at CRF 23.
     - Set FFMPEG_ENCODER and FFMPEG_HWACCEL in your shell profile to avoid
@@ -57,6 +57,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 _HW_CACHE_PATH = Path.home() / ".dojo_hw_cache.json"
 
@@ -122,9 +127,11 @@ def _encode_args(encoder, height, crf, preset):
                 "-rc:v", "vbr", "-cq:v", str(crf), "-b:v", "0"]
 
     if encoder == "h264_amf":
-        # AMD VBR quality mode
-        return ["-vf", vf, "-c:v", "h264_amf", "-quality", "speed",
-                "-rc", "vbr_latency", "-qp_i", str(crf), "-qp_p", str(crf)]
+        # CQP mode. format=yuv420p required: AMF only accepts 8-bit input, and
+        # HEVC sources (common for anime) decode to yuv420p10le without it.
+        vf_amf = f"scale=-2:{height},format=yuv420p"
+        return ["-vf", vf_amf, "-c:v", "h264_amf", "-quality", "speed",
+                "-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf)]
 
     if encoder == "h264_qsv":
         return ["-vf", vf, "-c:v", "h264_qsv", "-global_quality", str(crf),
@@ -142,10 +149,15 @@ def _transcode(ffmpeg_exe, src, dst, encoder, height, crf, preset, hwaccel, over
 
     hw_args = []
     if hwaccel and hwaccel.lower() not in ("", "none", "off"):
-        hw_args = ["-hwaccel", hwaccel]
-        # For CUDA, keep decoded frames in GPU memory for the scale filter
-        if hwaccel == "cuda" and _is_gpu_encoder(encoder):
-            hw_args += ["-hwaccel_output_format", "cuda"]
+        # AMF + hw decode always fails: the scale+format filter can't consume
+        # d3d11va/dxva2 frames. Software decode is fast enough for AMF anyway.
+        if encoder == "h264_amf":
+            pass
+        else:
+            hw_args = ["-hwaccel", hwaccel]
+            # For CUDA, keep decoded frames in GPU memory for the scale filter
+            if hwaccel == "cuda" and _is_gpu_encoder(encoder):
+                hw_args += ["-hwaccel_output_format", "cuda"]
 
     enc_args = _encode_args(encoder, height, crf, preset)
 
@@ -153,6 +165,7 @@ def _transcode(ffmpeg_exe, src, dst, encoder, height, crf, preset, hwaccel, over
         [ffmpeg_exe, "-y" if overwrite else "-n"]
         + hw_args
         + ["-i", src]
+        + ["-map", "0:v:0", "-map", "0:a"]  # keep ALL audio tracks
         + enc_args
         + ["-c:a", "copy", dst]
     )
@@ -234,7 +247,7 @@ def main():
     patterns = args.globs or ["*.mkv", "*.mp4", "*.avi"]
     inputs = []
     for pattern in patterns:
-        inputs.extend(glob.glob(os.path.join(args.input_dir, pattern)))
+        inputs.extend(glob.glob(os.path.join(glob.escape(args.input_dir), pattern)))
     inputs = sorted(set(inputs))
 
     if not inputs:

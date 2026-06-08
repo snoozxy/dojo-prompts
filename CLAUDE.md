@@ -58,10 +58,20 @@ python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out subs_downloa
 python3 dojo-prompts/scripts/sync_subs.py video_01.mkv subs_download/ \
   -o synced_subs/show_01.srt --episode 1
 
-# 5. Run subs2cia for each episode
+# 5. Identify Japanese audio (and subtitle) stream indices — ALWAYS do this first.
+# Many encodes put English audio at stream 0. Never assume 0 is Japanese.
+ffprobe -v error -select_streams a \
+  -show_entries stream=index:stream_tags=language,title \
+  -of csv=p=0 "$VIDEO_DIR/480p/show_01.mkv"
+# If using embedded subtitle tracks, also run:
+# ffprobe -v error -select_streams s \
+#   -show_entries stream=index:stream_tags=language,title \
+#   -of csv=p=0 "$VIDEO_DIR/480p/show_01.mkv"
+#
+# Then run subs2cia with the Japanese stream index (-ai is always required):
 PYTHONUTF8=1 subs2cia srs \
   -i "$VIDEO_DIR/480p/show_01.mkv" synced_subs/show_01.srt \
-  -p 500 -N -d out_srs --export-header-row
+  -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
 
 # 6. Generate episode summary and prepend to context column
 python3 dojo-prompts/scripts/prepend_summary.py out_srs/show_01.tsv "EPISODE_SUMMARY"

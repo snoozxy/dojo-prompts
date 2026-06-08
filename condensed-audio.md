@@ -52,21 +52,37 @@ ls "${VIDEO_DIR}/${VIDEO_STEM}.srt" 2>/dev/null
 ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language,title -of csv=p=0 "video.mp4"
 ```
 
-### 3. Run subs2cia
+### 3. Identify the Japanese audio stream
+
+**Always run ffprobe before subs2cia — never assume stream 0 is Japanese.** Many encodes put English audio first.
+
+```bash
+ffprobe -v error -select_streams a \
+  -show_entries stream=index:stream_tags=language,title \
+  -of csv=p=0 "video.mp4"
+```
+
+Find the stream index tagged `jpn`, `ja`, or `japanese`. Use that as `-ai`.
+
+### 4. Run subs2cia
 
 **CRITICAL:** Always pass `--no-gen-subtitle` — we only want the MP3, not a condensed subtitle file.
 
 ```bash
-# With JSON (preferred)
-subs2cia condense -i "video.mp4" "video.json" -t 1500 -p 200 --no-gen-subtitle -d out_condense
+# With JSON (preferred) — -ai required even with JSON input
+PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.json" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
 
 # With external SRT (fallback)
-subs2cia condense -i "video.mp4" -si 0 --no-gen-subtitle -d out_condense
+PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.srt" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
+
+# With embedded subtitle tracks (last resort) — check subtitle stream index with ffprobe too
+# ffprobe -v error -select_streams s -show_entries stream=index:stream_tags=language,title -of csv=p=0 "video.mp4"
+PYTHONUTF8=1 subs2cia condense -i "video.mp4" -ai <jp_audio_index> -si <jp_subtitle_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
 ```
 
-For YouTube downloads, use `-ai 0` to explicitly select the first audio stream rather than `-tl ja` — yt-dlp sometimes mislabels audio stream languages.
+Note: avoid `-tl ja` for track selection — it relies on stream language tags being accurate, which is unreliable on dual-audio encodes and some yt-dlp downloads. Always prefer explicit `-ai`.
 
-### 4. Move and clean up
+### 5. Move and clean up
 
 Move the condensed MP3 out of the output directory and into the source directory, then delete the output directory:
 ```bash
@@ -76,6 +92,6 @@ rm -rf out_condense/
 
 **Do NOT delete the transcript JSON file** — it may be needed by other workflows.
 
-### 5. Report results
+### 6. Report results
 
 Tell the user where the condensed MP3 was saved.

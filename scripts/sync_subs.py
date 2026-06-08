@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import json
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -55,6 +56,40 @@ def _find_ffsubsync():
     return None
 
 
+def _detect_jp_reference_stream(video):
+    """Return a ffsubsync --reference-stream value if JP audio is not the first stream.
+
+    Dual-audio encodes (e.g. EMBER) often have English as stream 0 and Japanese
+    as stream 1. ffsubsync defaults to the first audio stream, which produces
+    wildly wrong offsets when syncing Japanese subtitles against English audio.
+    This probes the video and returns e.g. "a:1" when JP is not stream 0.
+    Returns None when JP is already first (or when detection fails).
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=index:stream_tags=language",
+                "-of", "json",
+                video,
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        ja_langs = {"jpn", "ja", "japanese"}
+        for i, s in enumerate(streams):
+            lang = s.get("tags", {}).get("language", "").lower()
+            if lang in ja_langs:
+                if i > 0:
+                    return f"a:{i}"
+                return None  # JP is already the first audio stream
+    except Exception:
+        pass
+    return None
+
+
 def _find_candidates(directory, episode=None):
     candidates = []
     for fname in sorted(os.listdir(directory)):
@@ -72,12 +107,15 @@ def _find_candidates(directory, episode=None):
     return candidates
 
 
-def _try_sync(ffsubsync, video, candidate, tmp_dir):
+def _try_sync(ffsubsync, video, candidate, tmp_dir, reference_stream=None):
     name = os.path.basename(candidate)
     out_path = os.path.join(tmp_dir, re.sub(r"[^\w.-]", "_", name) + ".synced.srt")
     try:
+        cmd = [ffsubsync, video, "-i", candidate, "-o", out_path]
+        if reference_stream:
+            cmd += ["--reference-stream", reference_stream]
         result = subprocess.run(
-            [ffsubsync, video, "-i", candidate, "-o", out_path],
+            cmd,
             capture_output=True, text=True, timeout=300,
         )
         combined = result.stdout + result.stderr
@@ -120,6 +158,9 @@ def main():
                     help="Parallel ffsubsync workers (default: 4)")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print ranked table without writing output file")
+    ap.add_argument("--reference-stream", default=None,
+                    help="ffsubsync --reference-stream override (e.g. 'a:1' for second audio track). "
+                         "Auto-detected from the video when not set.")
     args = ap.parse_args()
 
     ffsubsync = os.environ.get("FFSUBSYNC_EXE") or _find_ffsubsync()
@@ -134,6 +175,10 @@ def main():
         ep_suffix = f" for episode {args.episode}" if args.episode else ""
         sys.exit(f"No subtitle candidates found{ep_suffix} in {args.candidates_dir}")
 
+    reference_stream = args.reference_stream or _detect_jp_reference_stream(args.video)
+    if reference_stream:
+        print(f"Using reference stream: {reference_stream} (JP audio detected)")
+
     print(f"Testing {len(candidates)} candidate(s) against: {os.path.basename(args.video)}")
 
     results = []
@@ -141,7 +186,7 @@ def main():
         n_workers = min(args.workers, len(candidates))
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {
-                pool.submit(_try_sync, ffsubsync, args.video, c, tmp_dir): c
+                pool.submit(_try_sync, ffsubsync, args.video, c, tmp_dir, reference_stream): c
                 for c in candidates
             }
             done = 0

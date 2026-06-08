@@ -124,6 +124,17 @@ python3 dojo-prompts/scripts/sync_subs.py \
 The script runs ffsubsync on every candidate concurrently, prints a ranked
 table of results, and copies the best match to the output path.
 
+**Dual-audio files (important):** Many encodes (e.g. EMBER, dual-audio WEBRips)
+have English as audio stream 0 and Japanese as stream 1. ffsubsync defaults to
+stream 0, so syncing Japanese subtitles against English audio produces wildly
+wrong offsets (often 25–60 s off). `sync_subs.py` auto-detects this via
+ffprobe and passes `--reference-stream a:N` to ffsubsync automatically — no
+extra flags needed. If auto-detection fails, override manually:
+```bash
+python3 dojo-prompts/scripts/sync_subs.py video.mkv subs/ -o out.srt \
+  --reference-stream a:1
+```
+
 **Decision tree (applied automatically):**
 
 | Abs offset | Result |
@@ -161,23 +172,31 @@ Use the synced subtitle files (or transcript JSON from AI fallback) as input
 to the requested output skills. Read the relevant skill files for full
 instructions:
 
-**Anki deck** — read `anki.md`. Pass the video and synced SRT to subs2cia:
+**Anki deck** — read `anki.md`. Before running subs2cia, always identify the Japanese audio stream with ffprobe — never assume stream 0 is Japanese:
 ```bash
-# With synced SRT (from subtitle match):
-subs2cia srs -i "video.mp4" "video.synced.srt" -p 500 -N -d out_srs --export-header-row
+# Always run this first
+ffprobe -v error -select_streams a \
+  -show_entries stream=index:stream_tags=language,title \
+  -of csv=p=0 "video.mkv"
+```
+Use the resulting Japanese stream index as `-ai`. Also check whether the subtitle file is pure Japanese (see the "Multi-language subtitle files" section in `anki.md`) — dual-language ASS files from fansubs will produce mixed-language cards.
 
-# With JSON (from AI transcription fallback):
-subs2cia srs -i "video.mp4" "video.json" -p 500 -N -d out_srs --export-header-row
+```bash
+# With synced SRT — -ai is always required (use index from ffprobe above)
+PYTHONUTF8=1 subs2cia srs -i "video.mkv" "video.synced.srt" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
+
+# With JSON (from AI transcription fallback) — -ai still required
+PYTHONUTF8=1 subs2cia srs -i "video.mp4" "video.json" -ai <jp_audio_index> -p 500 -N -d out_srs --export-header-row
 ```
 Then follow the full anki.md workflow (episode summaries → combine TSVs → export .apkg).
 
-**Condensed audio** — read `condensed-audio.md`. Pass the video and synced SRT:
+**Condensed audio** — read `condensed-audio.md`. Same ffprobe check applies — always identify the Japanese audio stream first and pass `-ai <jp_index>`:
 ```bash
 # With synced SRT:
-subs2cia condense -i "video.mp4" "video.synced.srt" -t 1500 -p 200 --no-gen-subtitle -d out_condense
+PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.synced.srt" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
 
 # With JSON:
-subs2cia condense -i "video.mp4" "video.json" -t 1500 -p 200 --no-gen-subtitle -d out_condense
+PYTHONUTF8=1 subs2cia condense -i "video.mp4" "video.json" -ai <jp_audio_index> -t 1500 -p 200 --no-gen-subtitle -d out_condense
 ```
 
 **Japanese subtitles** — if the synced SRT is already clean Japanese, use it

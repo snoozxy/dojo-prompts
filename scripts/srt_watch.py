@@ -7,6 +7,11 @@ Fine-grained cues with bunsetsu-aware line breaks (≤18 chars/line).
 import sys
 from pathlib import Path
 
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from srt_common import (
     Bunsetsu, Segment, Line, Cue,
     SENTENCE_ENDERS, MERGE_GAP_LIMIT, LINE_CHAR_LIMIT,
