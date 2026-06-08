@@ -40,6 +40,15 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
 
 SUB_EXTENSIONS = (".srt", ".ass", ".ssa")
 
+# Matches dual-language subtitle filenames like [CHS+JPN] or [JPN+CHT].
+# These produce mixed-language Anki cards and should be skipped when
+# JPN-only alternatives are available.
+_DUAL_LANG_PAT = re.compile(
+    r"(?:CHS|CHT|chi|zh)\s*[+&]\s*(?:JPN|jpn|ja)"
+    r"|(?:JPN|jpn|ja)\s*[+&]\s*(?:CHS|CHT|chi|zh)",
+    re.IGNORECASE,
+)
+
 _WIN_SCRIPTS = (
     r"%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0"
     r"\LocalCache\local-packages\Python313\Scripts\ffsubsync.exe"
@@ -91,20 +100,34 @@ def _detect_jp_reference_stream(video):
 
 
 def _find_candidates(directory, episode=None):
-    candidates = []
+    all_candidates = []
     for fname in sorted(os.listdir(directory)):
         if not fname.lower().endswith(SUB_EXTENSIONS):
             continue
         if episode is not None:
+            # Strip bracketed tokens (CRC hashes like [8F22448B], group tags)
+            # before matching so hash digits don't false-positive as episode numbers.
+            fname_stripped = re.sub(r"\[.*?\]", "", fname)
             pats = [
-                rf"(?<!\d)0*{episode}(?!\d)",
-                rf"[Ee]0*{episode}(?!\d)",
-                rf"[-_ ]0*{episode}[-_. ]",
+                rf"[Ee][Pp]?0*{episode}(?!\d)",       # E01, EP1, Ep01
+                rf" - 0*{episode}(?!\d)",               # "Show - 01 [hash]" fansub format
+                rf"[-_]0*{episode}(?=[-_.\s\[]|$)",    # _01. or _01[ or -01
             ]
-            if not any(re.search(p, fname) for p in pats):
+            if not any(re.search(p, fname_stripped) for p in pats):
                 continue
-        candidates.append(os.path.join(directory, fname))
-    return candidates
+        all_candidates.append(os.path.join(directory, fname))
+
+    # Prefer JPN-only files over dual-language (CHS+JPN, CHT+JPN, etc.).
+    # Dual-language ASS files contain both Chinese and Japanese lines and
+    # produce mixed-language Anki cards.
+    single_lang = [c for c in all_candidates if not _DUAL_LANG_PAT.search(os.path.basename(c))]
+    if single_lang:
+        skipped = len(all_candidates) - len(single_lang)
+        if skipped:
+            print(f"  Skipped {skipped} dual-language file(s) — JPN-only alternatives found")
+        return single_lang
+    # Fall back to dual-language files if no JPN-only alternative exists.
+    return all_candidates
 
 
 def _try_sync(ffsubsync, video, candidate, tmp_dir, reference_stream=None):
