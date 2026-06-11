@@ -3,7 +3,7 @@
 
 Supports two speech-to-text providers, selected with --provider:
   elevenlabs   ElevenLabs Scribe v2 (single synchronous POST)
-  soniox       Soniox stt-async-v4 (upload -> create -> poll -> fetch)
+  soniox       Soniox stt-async-v5 (upload -> create -> poll -> fetch)
 
 Both providers write the SAME canonical JSON shape (the ElevenLabs Scribe
 shape), so every downstream tool -- srt_watch.py, srt_translate.py,
@@ -163,7 +163,7 @@ SONIOX_API = "https://api.soniox.com/v1"
 
 
 def transcribe_soniox(audio_path: str, language: str, state_path: str) -> dict:
-    """Soniox stt-async-v4. Runs the async flow and normalizes the token stream
+    """Soniox stt-async-v5. Runs the async flow and normalizes the token stream
     into the canonical Scribe shape.
 
     Persists file_id and transcription_id to *state_path* immediately after each
@@ -209,7 +209,7 @@ def transcribe_soniox(audio_path: str, language: str, state_path: str) -> dict:
             f"{SONIOX_API}/transcriptions",
             headers={**auth, "Content-Type": "application/json"},
             json={
-                "model": "stt-async-v4",
+                "model": "stt-async-v5",
                 "file_id": file_id,
                 "language_hints": [language],
                 "enable_speaker_diarization": True,
