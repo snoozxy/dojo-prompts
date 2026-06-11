@@ -99,17 +99,21 @@ In batch mode, content2srs pairs subtitle files automatically by filename stem.
 CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs.exe"
 
 # Single episode — external subtitle (sidecar .srt/.json matches video stem)
+# Add --resegment for Japanese SRT/ASS (jimaku); drop it for AI transcript .json.
 "$CONTENT2SRS" build \
   -i "video.mkv" -s "subtitle.srt" \
   --audio-index <jp_audio_index> \
+  --resegment \
   --loudnorm -p 500 \
   --deck-name "<show_name>" \
   -o deck.db --apkg deck.apkg
 
 # Multi-episode batch — pass all videos and sidecar subs together; paired by stem
+# --resegment applies to all SRT/ASS in the batch; omit it for AI transcript .json.
 "$CONTENT2SRS" build -b -j 4 \
   -i "480p/"*.mkv "synced_subs/"*.srt \
   --audio-index <jp_audio_index> \
+  --resegment \
   --loudnorm -p 500 \
   --summaries summaries.json \
   --deck-name "<show_name>" \
@@ -136,6 +140,7 @@ CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs
 | `--audio-index` | `0` | Japanese audio stream index (always required — check with ffprobe) |
 | `--subtitle-index` | `0` | Embedded subtitle stream index (only for embedded subs) |
 | `-p` | `500` | Padding in ms around each subtitle line |
+| `--resegment` | - | **Recommended for jimaku/human SRT.** Re-split Japanese SRT/ASS into natural sentence cues via morphological analysis instead of the subtitler's display lines. Audio positions interpolated per source cue. Japanese only; overrides merge-threshold. Skip for AI transcript `.json` (already sentence-segmented) |
 | `--loudnorm` | - | Normalize audio loudness |
 | `--summaries` | `summaries.json` | Import episode briefings after build |
 | `--deck-name` | `show_name` | Deck name in the exported .apkg |

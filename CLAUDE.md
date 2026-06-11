@@ -77,9 +77,12 @@ ffprobe -v error -select_streams a \
 # (see anki.md for the Episode Summary Format)
 
 # 7. Build deck — all episodes in one pass (produces .db bundle + .apkg)
+# --resegment re-splits the jimaku SRT into natural sentence cards via Japanese
+# morphological analysis (audio positions interpolated per cue). Omit it only when
+# building from AI transcript .json, which is already sentence-segmented.
 "$CONTENT2SRS" build -b -j 4 \
   -i "$VIDEO_DIR/480p/"*.mkv "$TEMP/synced_subs/"*.srt \
-  --audio-index <jp_audio_index> --loudnorm -p 500 \
+  --audio-index <jp_audio_index> --resegment --loudnorm -p 500 \
   --summaries "$TEMP/summaries.json" \
   --deck-name "$PREFIX" \
   -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"

@@ -2,7 +2,7 @@
 
 This document explains the subtitle generation pipeline in `scripts/srt_common.py`, `scripts/srt_watch.py`, and `scripts/srt_translate.py`. It converts transcript JSON (character-level timestamps for Japanese) into SRT subtitles with natural line breaks.
 
-The same bunsetsu segmentation and Anki sentence-splitting algorithm is also built directly into [content2srs](../content2srs/src/subtitles/json_transcript.rs) (using Lindera/UniDic), which uses it for JSON-based SRS card generation.
+The same bunsetsu segmentation and Anki sentence-splitting algorithm is also built directly into [content2srs](../content2srs/src/subtitles/json_transcript.rs) (using Lindera/UniDic), which uses it for JSON-based SRS card generation. content2srs can also apply this pipeline to existing **SRT/ASS** subtitles (e.g. jimaku.cc) via `--resegment`: it interpolates per-character timestamps within each source cue, then runs the same bunsetsu → Anki-cue splitting, so human-authored subs get the same natural sentence cards as AI transcripts (with approximate, interpolated audio boundaries rather than per-character-accurate ones).
 
 The scripts produce **two SRT variants** from the same bunsetsu data:
 - **Watch** — optimized for reading subtitles while watching video (short lines, timing-aware pairing)

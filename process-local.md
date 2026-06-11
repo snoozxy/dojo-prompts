@@ -232,13 +232,19 @@ Also check whether the subtitle file is pure Japanese (see the "Multi-language s
 }
 ```
 
-**Run content2srs** — pass all videos and synced subs together; they pair by stem:
+**Run content2srs** — pass all videos and synced subs together; they pair by stem.
+
+Use `--resegment` on the jimaku SRT builds: it re-splits each subtitle into natural
+sentence cards via Japanese morphological analysis (audio positions interpolated
+within each source cue), instead of keeping the subtitler's display line breaks.
+**Omit `--resegment` for the JSON fallback** — AI transcripts are already
+sentence-segmented.
 
 ```bash
 # Multi-episode batch (synced subs in TEMP/synced_subs/, videos in 480p/)
 "$CONTENT2SRS" build -b -j 4 \
   -i "$VIDEO_DIR/480p/"*.mkv "$TEMP/synced_subs/"*.srt \
-  --audio-index <jp_audio_index> --loudnorm -p 500 \
+  --audio-index <jp_audio_index> --resegment --loudnorm -p 500 \
   --summaries "$TEMP/summaries.json" \
   --deck-name "$PREFIX" \
   -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"
@@ -246,11 +252,12 @@ Also check whether the subtitle file is pure Japanese (see the "Multi-language s
 # Single episode
 "$CONTENT2SRS" build \
   -i "$VIDEO_DIR/480p/show_ep01.mkv" -s "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
-  --audio-index <jp_audio_index> --loudnorm -p 500 \
+  --audio-index <jp_audio_index> --resegment --loudnorm -p 500 \
   --deck-name "$PREFIX" \
   -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"
 
 # With JSON fallback (content2srs accepts .json directly, same as .srt)
+# No --resegment here: the AI transcript is already sentence-segmented.
 "$CONTENT2SRS" build \
   -i "video.mp4" -s "$TEMP/${PREFIX}_ep01.json" \
   --audio-index <jp_audio_index> --loudnorm -p 500 \
