@@ -11,7 +11,7 @@ Workflow for locally stored video (downloaded anime, movies, dramas). Trigger wi
 1. Searches [jimaku.cc](https://jimaku.cc) for Japanese subtitles
 2. Tests all subtitle candidates in parallel with ffsubsync, picks best match
 3. Falls back to AI transcription (ElevenLabs / Soniox) if no good subtitle found
-4. Generates a content2srs Anki deck with optional 480p transcode for screenshots
+4. Generates a content2srs Anki deck directly from the source video (content2srs downscales screenshots to 1280px itself — no pre-transcode needed)
 
 Requires `$JIMAKU_API_KEY` (generate at jimaku.cc/account).
 

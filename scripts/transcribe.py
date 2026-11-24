@@ -161,10 +161,102 @@ def transcribe_elevenlabs(audio_path: str, language: str) -> dict:
 
 SONIOX_API = "https://api.soniox.com/v1"
 
+# Soniox stt-async rejects any single file longer than this (error_type
+# "invalid_audio_file": "Maximum audio duration (18000.0 s) exceeded."). Files
+# over the cap are split into chunks below it, transcribed separately, and merged
+# with each chunk's timestamps offset by its start position. A safety margin keeps
+# us clear of the exact boundary.
+SONIOX_MAX_DURATION = 18000.0
+SONIOX_CHUNK_TARGET = 17000.0
+
+
+def _probe_duration(path: str):
+    """Return media duration in seconds via ffprobe, or None if unavailable."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=120,
+        )
+        return float(result.stdout.strip())
+    except (ValueError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _split_audio(audio_path: str, chunk_seconds: float, total: float):
+    """Split *audio_path* into mono-mp3 chunks of at most *chunk_seconds*.
+
+    Returns a list of (chunk_path, offset_seconds). mp3 is used because Soniox
+    accepts it reliably and re-encoding gives clean per-chunk boundaries so the
+    offset equals exactly the requested cut point.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        sys.exit("ffmpeg not found; cannot split oversized audio for Soniox.")
+    stem = os.path.splitext(audio_path)[0]
+    chunks = []
+    offset = 0.0
+    idx = 0
+    while offset < total - 0.5:
+        chunk_path = f"{stem}.sxchunk{idx}.mp3"
+        cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{offset}", "-t", f"{chunk_seconds}", "-i", audio_path,
+            "-vn", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k", chunk_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        if result.returncode != 0:
+            sys.exit(f"ffmpeg chunk split failed: {(result.stderr or '')[-500:]}")
+        chunks.append((chunk_path, offset))
+        offset += chunk_seconds
+        idx += 1
+    return chunks
+
 
 def transcribe_soniox(audio_path: str, language: str, state_path: str) -> dict:
-    """Soniox stt-async-v5. Runs the async flow and normalizes the token stream
-    into the canonical Scribe shape.
+    """Soniox stt-async-v5. Transcribes *audio_path*, transparently splitting it
+    into sub-cap chunks first if it exceeds SONIOX_MAX_DURATION, and returns the
+    canonical Scribe shape.
+    """
+    if not os.environ.get("SONIOX_API_KEY"):
+        sys.exit("SONIOX_API_KEY is not set.")
+
+    duration = _probe_duration(audio_path)
+    if duration is None or duration <= SONIOX_MAX_DURATION:
+        return _soniox_transcribe_one(audio_path, language, state_path)
+
+    # Oversized: split, transcribe each chunk, merge with offsets.
+    n = math.ceil(duration / SONIOX_CHUNK_TARGET)
+    chunk_seconds = math.ceil(duration / n) + 1  # even split, both sides < cap
+    print(f"Audio is {duration:.0f}s (> Soniox cap {SONIOX_MAX_DURATION:.0f}s); "
+          f"splitting into {n} chunks of ~{chunk_seconds}s.")
+    chunks = _split_audio(audio_path, chunk_seconds, duration)
+
+    merged_words = []
+    merged_text = []
+    for i, (chunk_path, offset) in enumerate(chunks):
+        print(f"Transcribing chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)...")
+        chunk_state = f"{state_path}.chunk{i}"
+        canon = _soniox_transcribe_one(chunk_path, language, chunk_state)
+        for w in canon.get("words", []):
+            w = dict(w)
+            w["start"] = round(w.get("start", 0.0) + offset, 3)
+            w["end"] = round(w.get("end", 0.0) + offset, 3)
+            merged_words.append(w)
+        merged_text.append(canon.get("text", ""))
+        try:
+            os.remove(chunk_path)
+        except OSError:
+            pass
+
+    return {"language_code": "jpn", "text": "".join(merged_text), "words": merged_words}
+
+
+def _soniox_transcribe_one(audio_path: str, language: str, state_path: str) -> dict:
+    """Run the Soniox async flow for a single sub-cap file.
 
     Persists file_id and transcription_id to *state_path* immediately after each
     step so a restart can resume polling the existing job rather than re-uploading.
@@ -340,6 +432,9 @@ def main():
     upload_path = _prepare_upload_path(args.audio, args.audio_index, args.extract_audio)
 
     stem = args.output or os.path.splitext(os.path.basename(args.audio))[0]
+    # Strip .json if user passed a full path like "foo/bar.json" — we always append it below.
+    if stem.endswith(".json"):
+        stem = stem[:-5]
     out_path = f"{stem}.json"
 
     if os.path.exists(out_path) and not args.force:

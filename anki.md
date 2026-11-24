@@ -79,43 +79,80 @@ If `latin-only lines` is significant (more than a handful of timing/metadata lin
 
 Before running content2srs, check for input sources in priority order:
 
-**1. transcript JSON files (preferred)** — Check if there are transcript JSON files alongside the videos:
+**1. Fused transcript JSON (best — accurate text + real timing/speakers)** — When you
+have a jimaku SRT for the episode, fuse it with an AI transcript (see "Fusing jimaku
+subs with AI timing" below) and build from the fused `.json`. You get jimaku's accurate
+text on the AI's per-character timing and speaker labels, run through content2srs's
+UniDic sentence/speaker segmentation — one card per sentence/speaker turn, audio cut at
+real word timing.
+
+**2. Plain AI transcript JSON** — No jimaku match for the episode? Build straight from the
+AI transcript `.json`. Same segmentation, real timing, but AI-quality text.
 ```bash
 ls "$SOURCE_DIR"/*.json 2>/dev/null
 ```
-If JSON files exist, use them as input. content2srs uses UniDic-based sentence segmentation for Japanese — one card per sentence, better card boundaries than SRT splitting.
 
-**2. External SRT/ASS files (fallback)** — Check if there are subtitle files alongside the videos:
+**3. Raw external SRT/ASS files (degraded fallback)** — Only when you can't transcribe.
+Card boundaries follow the subtitler's display lines (fragments or run-ons) and there
+are no speaker splits.
 ```bash
 ls "$SOURCE_DIR"/*.srt "$SOURCE_DIR"/*.ass 2>/dev/null
 ```
 In batch mode, content2srs pairs subtitle files automatically by filename stem.
 
-**3. Embedded tracks (last resort)** — Use `--subtitle-index` with the Japanese stream index from ffprobe.
+**4. Embedded tracks (last resort)** — Use `--subtitle-index` with the Japanese stream index from ffprobe.
+
+### Fusing jimaku subs with AI timing
+
+Human subs have the right text but display-line timing and no speakers; AI transcripts
+have real per-character timing + `speaker_id` but worse text. `fuse_subs.py` aligns the
+two (difflib over the character streams) and writes a canonical transcript JSON with
+jimaku text on AI timing/speakers — a drop-in for the JSON path above:
+
+```bash
+# After clean_subs.py on the SRT and transcribe.py on the video:
+mkdir -p fused
+python3 dojo-prompts/scripts/fuse_subs.py \
+  transcript.json synced_subs/show_01.srt \
+  -o fused/show_01.json          # name to match the video stem (show_01.mkv)
+```
+
+It prints the share of characters that got exact AI timing vs. interpolated and an
+overall alignment ratio; a low ratio (warned at <0.5) means the transcript and subtitle
+are probably different episodes, or the SRT still needs cleaning.
 
 ## Base Command
 
 ```bash
 CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs.exe"
 
-# Single episode — external subtitle (sidecar .srt/.json matches video stem)
-# Add --resegment for Japanese SRT/ASS (jimaku); drop it for AI transcript .json.
+# Single episode — fused transcript (jimaku text + AI timing/speakers; best quality)
+# Build episode.fused.json first with fuse_subs.py — see "Fusing jimaku subs with
+# AI timing" below. A plain AI transcript .json works the same way (no fusion).
 "$CONTENT2SRS" build \
-  -i "video.mkv" -s "subtitle.srt" \
+  -i "video.mkv" -s "episode.fused.json" \
   --audio-index <jp_audio_index> \
-  --resegment \
   --loudnorm -p 500 \
   --deck-name "<show_name>" \
   -o deck.db --apkg deck.apkg
 
-# Multi-episode batch — pass all videos and sidecar subs together; paired by stem
-# --resegment applies to all SRT/ASS in the batch; omit it for AI transcript .json.
+# Multi-episode batch — pass all videos and fused .json files together; paired by
+# stem. Keep fused files in their own dir with plain .json names that match the
+# video stems, so they don't collide with the raw .srt in synced_subs/.
 "$CONTENT2SRS" build -b -j 4 \
-  -i "480p/"*.mkv "synced_subs/"*.srt \
+  -i "$VIDEO_DIR/"*.mkv "fused/"*.json \
   --audio-index <jp_audio_index> \
-  --resegment \
   --loudnorm -p 500 \
   --summaries summaries.json \
+  --deck-name "<show_name>" \
+  -o deck.db --apkg deck.apkg
+
+# Raw subtitle (degraded fallback — accurate text, but display-line card
+# boundaries and no speaker splits; use only when you can't transcribe)
+"$CONTENT2SRS" build \
+  -i "video.mkv" -s "subtitle.srt" \
+  --audio-index <jp_audio_index> \
+  --loudnorm -p 500 \
   --deck-name "<show_name>" \
   -o deck.db --apkg deck.apkg
 
@@ -140,7 +177,6 @@ CONTENT2SRS="C:/Users/snoozy/Desktop/dojo/content2srs/target/release/content2srs
 | `--audio-index` | `0` | Japanese audio stream index (always required — check with ffprobe) |
 | `--subtitle-index` | `0` | Embedded subtitle stream index (only for embedded subs) |
 | `-p` | `500` | Padding in ms around each subtitle line |
-| `--resegment` | - | **Recommended for jimaku/human SRT.** Re-split Japanese SRT/ASS into natural sentence cues via morphological analysis instead of the subtitler's display lines. Audio positions interpolated per source cue. Japanese only; overrides merge-threshold. Skip for AI transcript `.json` (already sentence-segmented) |
 | `--loudnorm` | - | Normalize audio loudness |
 | `--summaries` | `summaries.json` | Import episode briefings after build |
 | `--deck-name` | `show_name` | Deck name in the exported .apkg |

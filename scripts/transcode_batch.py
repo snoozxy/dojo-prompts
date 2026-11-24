@@ -293,11 +293,12 @@ def _transcode(
 
     hw_args = []
     if hwaccel and hwaccel.lower() not in ("", "none", "off"):
-        # AMF + hw decode fails with scale+format filters — software decode is fine.
-        if encoder != "h264_amf":
-            hw_args = ["-hwaccel", hwaccel]
-            if hwaccel == "cuda" and _is_gpu_encoder(encoder):
-                hw_args += ["-hwaccel_output_format", "cuda"]
+        hw_args = ["-hwaccel", hwaccel]
+        if hwaccel == "cuda" and _is_gpu_encoder(encoder):
+            # Full CUDA pipeline: decode + scale_cuda + encode all on GPU.
+            # AMF does NOT get hwaccel_output_format — frames stay in system
+            # memory so the scale+format filters can run on CPU.
+            hw_args += ["-hwaccel_output_format", "cuda"]
 
     enc_args = _encode_args(
         encoder, height, crf, preset, hwaccel, scale_cuda_ok,

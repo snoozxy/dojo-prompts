@@ -4,23 +4,51 @@
 Runs ffsubsync on all candidates in parallel, ranks by absolute offset, and
 copies the best match to the output path.
 
+With --fuse, after the best subtitle is written it chains the rest of the
+jimaku->fused pipeline in one command: clean_subs.py (in place) -> transcribe.py
+(the video, for real timing + speaker labels) -> fuse_subs.py (jimaku text onto
+that timing) -> a fused transcript JSON ready for `content2srs build`. An existing
+--transcript is reused, so transcription (the expensive part) never runs twice.
+
 Usage:
     python3 sync_subs.py <video> <candidates_dir> -o <output.srt>
     python3 sync_subs.py <video> <candidates_dir> -o <output.srt> --episode 3
     python3 sync_subs.py <video> <candidates_dir> -o <output.srt> --dry-run
+    # One-shot jimaku -> fused.json (sync + clean + transcribe + fuse):
+    python3 sync_subs.py <video> <candidates_dir> -o ep01.srt --episode 1 \
+        --fuse --provider soniox --fused-out fused/ep01.json
+    # Re-fuse an already-synced SRT without re-running ffsubsync (candidates_dir omitted):
+    python3 sync_subs.py <video> -o ep01.srt --no-sync \
+        --provider soniox --fused-out fused/ep01.json
 
 Options:
     --episode N      Filter candidates to those matching episode number N
+    --group SUBSTR   Filter candidates to filenames containing SUBSTR (case-insensitive).
+                      Use after episode 1 identifies the winning fansub group so later
+                      episodes sync against just that group instead of re-testing all of
+                      them. Falls back to the unfiltered (episode-filtered) list with a
+                      warning if nothing matches.
     --threshold T    Max acceptable offset in seconds (default: 300)
     --workers N      Parallel ffsubsync processes (default: 4)
     --dry-run        Show ranked table without writing output file
+    --fuse           After syncing, clean + transcribe + fuse into a transcript JSON
+    --no-sync        Skip ffsubsync; fuse the existing SRT at -o (implies --fuse).
+                     candidates_dir may be omitted.
+    --provider P     STT provider for --fuse (elevenlabs|soniox); required unless a
+                     transcript already exists at --transcript
+    --transcript P   Transcript JSON path (--fuse). Reused if present; else written
+                     here. Default: <out>.transcript.json
+    --fused-out P    Fused transcript JSON output (--fuse). Default: <out>.fused.json
+    --language L     Transcription language (--fuse; default: ja)
+    --no-clean       Skip clean_subs.py before fusing (--fuse)
 
 Exit codes:
-    0  Best match written to --out
-    1  No candidate passed the threshold (or --dry-run)
+    0  Best match written to --out (and fused JSON written, if --fuse)
+    1  No candidate passed the threshold (or --dry-run), or a --fuse step failed
 
 Environment:
-    FFSUBSYNC_EXE    Override path to ffsubsync executable
+    FFSUBSYNC_EXE          Override path to ffsubsync executable
+    ELEVENLABS_API_KEY / SONIOX_API_KEY    Read by transcribe.py for --fuse
 """
 
 import argparse
@@ -99,7 +127,7 @@ def _detect_jp_reference_stream(video):
     return None
 
 
-def _find_candidates(directory, episode=None):
+def _find_candidates(directory, episode=None, group=None):
     all_candidates = []
     for fname in sorted(os.listdir(directory)):
         if not fname.lower().endswith(SUB_EXTENSIONS):
@@ -125,9 +153,19 @@ def _find_candidates(directory, episode=None):
         skipped = len(all_candidates) - len(single_lang)
         if skipped:
             print(f"  Skipped {skipped} dual-language file(s) — JPN-only alternatives found")
-        return single_lang
-    # Fall back to dual-language files if no JPN-only alternative exists.
-    return all_candidates
+        candidates = single_lang
+    else:
+        # Fall back to dual-language files if no JPN-only alternative exists.
+        candidates = all_candidates
+
+    if group:
+        group_lower = group.lower()
+        narrowed = [c for c in candidates if group_lower in os.path.basename(c).lower()]
+        if narrowed:
+            return narrowed
+        print(f"  --group '{group}' matched nothing — falling back to all candidates")
+
+    return candidates
 
 
 def _try_sync(ffsubsync, video, candidate, tmp_dir, reference_stream=None):
@@ -153,6 +191,65 @@ def _try_sync(ffsubsync, video, candidate, tmp_dir, reference_stream=None):
         return (candidate, None, None)
 
 
+def _default_transcript_path(out):
+    return os.path.splitext(out)[0] + ".transcript.json"
+
+
+def _default_fused_path(out):
+    return os.path.splitext(out)[0] + ".fused.json"
+
+
+def _run_fuse_chain(args):
+    """Clean the synced SRT, transcribe the video, and fuse them into one JSON.
+
+    Each step shells out to the sibling script with the current interpreter, so
+    behaviour matches running them by hand. Transcription is skipped when the
+    transcript already exists (it is the slow/paid step). Raises
+    subprocess.CalledProcessError if any step fails.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    def run(script, *script_args):
+        path = os.path.join(script_dir, script)
+        if not os.path.isfile(path):
+            sys.exit(f"--fuse needs {script} next to sync_subs.py (not found: {path})")
+        print(f"\n>>> {script} {' '.join(script_args)}")
+        subprocess.run([sys.executable, path, *script_args], check=True)
+
+    srt = args.out
+    transcript = args.transcript or _default_transcript_path(args.out)
+    fused = args.fused_out or _default_fused_path(args.out)
+
+    # 1. Clean the synced SRT in place (strip ASS tags, furigana, music symbols).
+    if not args.no_clean:
+        run("clean_subs.py", srt, "--inplace")
+
+    # 2. Transcribe for real per-character timing + speaker_id (reuse if present).
+    if os.path.exists(transcript):
+        print(f"\nReusing existing transcript: {transcript}")
+    elif args.provider:
+        run("transcribe.py", "--provider", args.provider,
+            "--language", args.language, "-o", transcript, args.video)
+    else:
+        sys.exit("--fuse needs --provider to transcribe (no existing --transcript).")
+
+    # 3. Fuse jimaku text onto the AI timing/speakers.
+    fused_dir = os.path.dirname(os.path.abspath(fused))
+    if fused_dir:
+        os.makedirs(fused_dir, exist_ok=True)
+    run("fuse_subs.py", transcript, srt, "-o", fused)
+    print(f"\nFused transcript ready: {fused}")
+
+
+def _fuse_or_exit(args):
+    """Run the fuse chain, exiting cleanly (not with a traceback) on step failure."""
+    try:
+        _run_fuse_chain(args)
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"\nFuse step failed (exit {e.returncode}). The synced SRT is saved at "
+                 f"{args.out} — rerun the fuse step (e.g. with --no-sync) once fixed.")
+
+
 def _label(offset, threshold):
     if offset is None:
         return "error"
@@ -171,10 +268,15 @@ def main():
         description="Rank subtitle candidates by sync quality and copy the best match."
     )
     ap.add_argument("video", help="Video file to sync against")
-    ap.add_argument("candidates_dir", help="Directory of candidate subtitle files")
+    ap.add_argument("candidates_dir", nargs="?", default=None,
+                    help="Directory of candidate subtitle files (omit when using --no-sync)")
     ap.add_argument("-o", "--out", required=True, help="Output path for best-synced subtitle (.srt)")
     ap.add_argument("--episode", type=int, default=None,
                     help="Filter candidates to those matching this episode number")
+    ap.add_argument("--group", default=None,
+                    help="Filter candidates to filenames containing this substring "
+                         "(case-insensitive). Use once episode 1 has identified the "
+                         "winning fansub group.")
     ap.add_argument("--threshold", type=float, default=300.0,
                     help="Max acceptable absolute offset in seconds (default: 300)")
     ap.add_argument("--workers", type=int, default=4,
@@ -184,7 +286,43 @@ def main():
     ap.add_argument("--reference-stream", default=None,
                     help="ffsubsync --reference-stream override (e.g. 'a:1' for second audio track). "
                          "Auto-detected from the video when not set.")
+    ap.add_argument("--fuse", action="store_true",
+                    help="After syncing, clean + transcribe + fuse into a transcript JSON.")
+    ap.add_argument("--no-sync", action="store_true",
+                    help="Skip ffsubsync; fuse an already-synced SRT at -o (implies --fuse).")
+    ap.add_argument("--provider", choices=["elevenlabs", "soniox"], default=None,
+                    help="STT provider for --fuse (required unless --transcript exists).")
+    ap.add_argument("--transcript", default=None,
+                    help="Transcript JSON for --fuse; reused if present. Default: <out>.transcript.json")
+    ap.add_argument("--fused-out", default=None,
+                    help="Fused transcript JSON output for --fuse. Default: <out>.fused.json")
+    ap.add_argument("--language", default="ja", help="Transcription language for --fuse (default: ja).")
+    ap.add_argument("--no-clean", action="store_true",
+                    help="Skip clean_subs.py before fusing (--fuse).")
     args = ap.parse_args()
+
+    # --no-sync implies --fuse: with sync skipped, fusing is the only work left.
+    if args.no_sync:
+        args.fuse = True
+
+    # Fail fast: --fuse with no way to obtain a transcript.
+    if args.fuse and not args.provider:
+        transcript = args.transcript or _default_transcript_path(args.out)
+        if not os.path.exists(transcript):
+            sys.exit("--fuse requires --provider (to transcribe) or an existing "
+                     f"--transcript JSON (looked for {transcript}).")
+
+    # --no-sync: skip ffsubsync entirely and fuse the already-synced SRT at -o.
+    if args.no_sync:
+        if not os.path.isfile(args.out):
+            sys.exit(f"--no-sync expects an already-synced SRT at -o, but {args.out} "
+                     f"does not exist.")
+        print(f"Skipping sync — fusing existing SRT: {args.out}")
+        _fuse_or_exit(args)
+        return
+
+    if not args.candidates_dir:
+        ap.error("candidates_dir is required unless --no-sync is set")
 
     ffsubsync = os.environ.get("FFSUBSYNC_EXE") or _find_ffsubsync()
     if not ffsubsync:
@@ -193,7 +331,7 @@ def main():
             "Or set FFSUBSYNC_EXE=/path/to/ffsubsync"
         )
 
-    candidates = _find_candidates(args.candidates_dir, args.episode)
+    candidates = _find_candidates(args.candidates_dir, args.episode, args.group)
     if not candidates:
         ep_suffix = f" for episode {args.episode}" if args.episode else ""
         sys.exit(f"No subtitle candidates found{ep_suffix} in {args.candidates_dir}")
@@ -251,6 +389,9 @@ def main():
         shutil.copy2(synced_path, args.out)
 
     print(f"\nBest: {os.path.basename(candidate)} ({offset:+.2f}s) → {args.out}")
+
+    if args.fuse:
+        _fuse_or_exit(args)
 
 
 if __name__ == "__main__":

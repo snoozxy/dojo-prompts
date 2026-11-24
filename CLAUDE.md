@@ -31,13 +31,25 @@ This is the most common multi-step request. The pipeline is:
 ```
 local video files
   → [hw_probe.py]        check GPU / worker settings (once per machine)
-  → [transcode_batch.py] optional 480p transcode for smaller screenshots
   → [jimaku_dl.py]       download JP subtitle candidates from jimaku.cc
   → [sync_subs.py]       test all candidates in parallel, pick best sync
+  → [clean_subs.py]      strip ASS tags, furigana, music symbols, HTML noise
+  → [transcribe.py]      AI transcript — word-level timing + speaker labels
+  → [fuse_subs.py]       fuse jimaku text onto AI timing/speakers → fused .json
   → [content2srs build]  audio clips + screenshots → combined .db bundle
   → [content2srs summary] attach episode briefings to the bundle
   → [content2srs export] package into final .apkg (or use --apkg on build)
 ```
+
+**Why transcribe AND use jimaku subs?** Jimaku subs have accurate text (names, jargon, kanji the AI mishears) but only display-line timing and no speaker info — so cutting cards from them gives fragments (one cue) or run-ons (time-merged cues with multiple speakers jammed together). The AI transcript has the opposite: real per-character timing and `speaker_id`, but worse text. `fuse_subs.py` aligns the two and keeps the best of each — jimaku text on AI timing/speakers — so `content2srs` runs its normal Japanese sentence/speaker segmentation and produces cards that break on real sentence and speaker boundaries with accurate text. This replaces the old `--resegment` flag (which only interpolated timing within each cue and had no speaker awareness). If no jimaku match exists for an episode, build straight from the AI transcript `.json` (no fusion step).
+
+**No pre-transcode step.** `content2srs` already downscales every screenshot to
+1280px wide at extraction time regardless of source resolution (it's a fixed
+`scale=1280:-1` in its ffmpeg frame-extraction filter), so building directly
+from the original video files produces the same screenshot size as building
+from a 480p proxy — without paying for a full re-encode pass first.
+`transcode_batch.py` still exists for cases where disk space is tight, but
+it's optional, not part of the default pipeline.
 
 **Don't skip the episode briefing step.** It attaches a translation briefing to every card's context field via `content2srs summary` or the `--summaries` flag, making LLM-assisted study much more useful. Read `anki.md` for the briefing format.
 
@@ -55,34 +67,47 @@ mkdir -p "$TEMP/subs_download" "$TEMP/synced_subs"
 # 1. Hardware check (once — skip if ~/.dojo_hw_cache.json exists and is recent)
 python3 dojo-prompts/scripts/hw_probe.py --check || python3 dojo-prompts/scripts/hw_probe.py
 
-# 2. Optional 480p transcode (recommended for Anki — much smaller files)
-python3 dojo-prompts/scripts/transcode_batch.py "$VIDEO_DIR" "$VIDEO_DIR/480p" --encoder auto
-
-# 3. Search jimaku.cc for subtitles (requires $JIMAKU_API_KEY)
+# 2. Search jimaku.cc for subtitles (requires $JIMAKU_API_KEY)
 python3 dojo-prompts/scripts/jimaku_dl.py search "Show Name"
 python3 dojo-prompts/scripts/jimaku_dl.py download <entry_id> --out "$TEMP/subs_download"
 
-# 4. Sync subtitles (test all candidates, pick best)
-python3 dojo-prompts/scripts/sync_subs.py "$VIDEO_DIR/480p/show_01.mkv" "$TEMP/subs_download/" \
+# 3. Sync subtitles (test all candidates, pick best)
+python3 dojo-prompts/scripts/sync_subs.py "$VIDEO_DIR/show_01.mkv" "$TEMP/subs_download/" \
   -o "$TEMP/synced_subs/${PREFIX}_ep01.srt" --episode 1
 
-# 5. Identify Japanese audio stream index — ALWAYS do this first.
+# 3b. Clean synced subtitles (strip ASS tags, furigana, music symbols, HTML)
+python3 dojo-prompts/scripts/clean_subs.py "$TEMP/synced_subs/"*.srt --inplace
+
+# 4. Identify Japanese audio stream index — ALWAYS do this first.
 # Many encodes put English audio at stream 0. Never assume 0 is Japanese.
 ffprobe -v error -select_streams a \
   -show_entries stream=index:stream_tags=language,title \
-  -of csv=p=0 "$VIDEO_DIR/480p/show_01.mkv"
+  -of csv=p=0 "$VIDEO_DIR/show_01.mkv"
+
+# 5. Transcribe each episode (AI), then fuse the jimaku text onto its timing.
+# transcribe.py auto-detects the Japanese audio stream; fuse_subs.py aligns the
+# cleaned jimaku SRT onto the AI word timing + speaker_id and writes a fused .json.
+# Route fused files to their own dir with plain .json names so they pair with the
+# video by stem and don't collide with the .srt in synced_subs/.
+mkdir -p "$TEMP/fused"
+python3 dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox> \
+  --language ja -o "$TEMP/${PREFIX}_ep01" "$VIDEO_DIR/show_01.mkv"
+python3 dojo-prompts/scripts/fuse_subs.py \
+  "$TEMP/${PREFIX}_ep01.json" "$TEMP/synced_subs/${PREFIX}_ep01.srt" \
+  -o "$TEMP/fused/show_01.json"      # stem must match the video (show_01.mkv)
 
 # 6. Generate episode briefings JSON (read synced SRTs, write summaries.json)
 # Format: { "sources": { "show_01.mkv": "Episode 1 briefing...", ... } }
 # (see anki.md for the Episode Summary Format)
 
 # 7. Build deck — all episodes in one pass (produces .db bundle + .apkg)
-# --resegment re-splits the jimaku SRT into natural sentence cards via Japanese
-# morphological analysis (audio positions interpolated per cue). Omit it only when
-# building from AI transcript .json, which is already sentence-segmented.
+# Build directly from the original video files — content2srs downscales
+# screenshots to 1280px on its own, so no pre-transcode is needed. No
+# --resegment: the fused transcript is already sentence-segmented like any
+# AI transcript.
 "$CONTENT2SRS" build -b -j 4 \
-  -i "$VIDEO_DIR/480p/"*.mkv "$TEMP/synced_subs/"*.srt \
-  --audio-index <jp_audio_index> --resegment --loudnorm -p 500 \
+  -i "$VIDEO_DIR/"*.mkv "$TEMP/fused/"*.json \
+  --audio-index <jp_audio_index> --loudnorm -p 500 \
   --summaries "$TEMP/summaries.json" \
   --deck-name "$PREFIX" \
   -o "$TEMP/$PREFIX.db" --apkg "$TEMP/$PREFIX.apkg"
@@ -101,10 +126,12 @@ All helper scripts live in `dojo-prompts/scripts/`:
 | Script | What it does |
 |---|---|
 | `hw_probe.py` | Detect CPU/RAM/GPU, test ffmpeg encoders, cache to `~/.dojo_hw_cache.json`. Run once per machine. |
-| `transcode_batch.py` | Parallel ffmpeg transcode with GPU auto-detection (`--encoder auto`). |
+| `transcode_batch.py` | Parallel ffmpeg transcode with GPU auto-detection (`--encoder auto`). Optional — not part of the default Anki pipeline (content2srs downscales screenshots itself); use only to shrink files for disk space. |
 | `jimaku_dl.py` | Search, list files, and download subtitles from jimaku.cc. |
-| `sync_subs.py` | Test subtitle candidates against a video in parallel, copy best match. |
-| `transcribe.py` | Transcribe audio/video via ElevenLabs Scribe or Soniox. Resumes after crashes. |
+| `sync_subs.py` | Test subtitle candidates against a video in parallel, copy best match. `--group SUBSTR` narrows candidates to one fansub group by filename substring — use for episodes 2+ once episode 1 has identified the winner, so only one ffsubsync job runs instead of testing every group again. With `--fuse --provider <p>` it chains clean→transcribe→fuse after syncing, producing the fused `.json` in one command (reuses an existing `--transcript` so transcription never runs twice). Independent per episode — safe to background several at once (`&` + `wait`) once the winning group is known. |
+| `clean_subs.py` | Strip ASS override tags, HTML, ruby/furigana annotations, music symbols from SRT/ASS files. ASS input is converted to SRT. Run after sync, before fuse/content2srs. `--inplace` overwrites SRT files in place. |
+| `fuse_subs.py` | Fuse a cleaned jimaku SRT with an AI transcript JSON → a fused transcript `.json` (accurate jimaku text on AI per-character timing + speaker labels). Drop-in for the content2srs JSON path and `srt_watch.py`/`srt_translate.py`. Run after `clean_subs.py` + `transcribe.py`, before `content2srs build`. |
+| `transcribe.py` | Transcribe audio/video via ElevenLabs Scribe or Soniox. Resumes after crashes. Audio file is a **positional argument** (not `--input`). `-o` can be passed with or without `.json` — the script always appends `.json` to the stem. The API call is pure network I/O and per-episode state is fully isolated, so it's safe (and much faster wall-clock) to background 3–4 episodes' transcriptions at once instead of running them sequentially. |
 
 Anki deck creation uses the `content2srs` binary at `content2srs/target/release/content2srs.exe` — see `anki.md`.
 
@@ -231,6 +258,19 @@ If a required tool is missing, just install it and move on. No need to ask — b
   ```
 - **content2srs**: Anki deck creation uses the `content2srs` Rust binary in this repo. Build with: `cd content2srs && cargo build --release`. Binary lives at `content2srs/target/release/content2srs.exe`.
 - **subs2cia**: Still required for the condensed-audio skill only. Must use [snoozxy's fork](https://github.com/snoozxy/subs2cia). Install with: `pip install git+https://github.com/snoozxy/subs2cia.git`
-- **Transcription provider**: Any skill that transcribes audio/video (create-srt, find-mistakes, style-guide) supports two providers — **ElevenLabs Scribe v2** and **Soniox**. Ask the user which to use each time, then run `dojo-prompts/scripts/transcribe.py --provider <elevenlabs|soniox>`. Both write the same canonical transcript JSON, so all downstream steps are identical. Make sure the chosen provider's key is set first — `$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`; if not, ask the user to paste it before transcribing.
+- **Transcription provider**: Any skill that transcribes audio/video (create-srt, find-mistakes, style-guide) supports two providers — **ElevenLabs Scribe v2** and **Soniox**. Ask the user which to use each time. Both write the same canonical transcript JSON, so all downstream steps are identical. Make sure the chosen provider's key is set first — `$ELEVENLABS_API_KEY` or `$SONIOX_API_KEY`; if not, ask the user to paste it before transcribing.
+
+  Correct invocation — **audio file is a positional argument, not `--input`**:
+  ```bash
+  ELEVENLABS_API_KEY=<key> python3 dojo-prompts/scripts/transcribe.py \
+    --provider elevenlabs --language ja \
+    -o DOJO_TEMP/prefix/prefix.json \
+    path/to/video.mp4
+  ```
+  The `-o` path may include `.json` or omit it — the script normalizes either form. Output always lands at `<stem>.json`.
+
+  **Soniox 5-hour cap:** Soniox rejects any single file longer than 18,000 s (5 hours) with `invalid_audio_file` ("Maximum audio duration exceeded"). The `.mka`/`.mp3` container is *not* the problem — it's purely duration. `transcribe.py` now handles this automatically: it probes duration and, if over the cap, splits the audio into even sub-cap mp3 chunks, transcribes each, and merges them into one JSON with per-chunk timestamp offsets. No manual splitting needed. (ElevenLabs has no such duration cap.)
+
+- **content2srs build speed**: On this machine (d3d11va GPU decode, 8 workers) content2srs is much faster than the estimates in older notes — a ~3000-card episode completes in ~90 seconds, not 15-20 minutes. Expect roughly 1 minute per 2000 cards for YouTube MP4 source material. Audio clip extraction batches ~96 clips per ffmpeg invocation (via an `asplit`/`atrim` filter graph, mirroring the screenshot batching in `frames.rs`) instead of spawning one ffmpeg process per card — verified ~3x faster on a dense 2600-card synthetic benchmark (34s → 11s) with correct output even for overlapping padded ranges.
 - **jimaku.cc subtitles**: The `process-local` skill downloads Japanese subtitles from jimaku.cc. Requires `$JIMAKU_API_KEY` (generate at jimaku.cc/account). Use `dojo-prompts/scripts/jimaku_dl.py` for all API calls — search, file listing, and download.
 - **Primed Listening**: `dojo-prompts/primed-listening.lua` is an mpv script, not an AI skill. To install it, copy it to `~/.config/mpv/scripts/`.
